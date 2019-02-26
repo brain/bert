@@ -6,6 +6,7 @@ import tokenization
 import os
 import datetime
 import pickle
+import pandas as pd
 
 flags = tf.flags
 FLAGS = flags.FLAGS
@@ -21,6 +22,7 @@ def del_all_flags(FLAGS):
 del_all_flags(tf.flags.FLAGS)
 
 flags.DEFINE_bool("use_tpu", False, "Whether to use TPU or GPU/CPU.")
+flags.DEFINE_integer("predict_batch_size", 128, "Number of instances in a given batch.")
 
 def convert_examples_to_features(examples, max_seq_length, tokenizer):
     features = []
@@ -195,7 +197,7 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
 
         sim_scores = create_model(
             bert_config, is_training, l_input_ids, r_input_ids,
-            use_one_hot_embeddings)
+            labels, use_one_hot_embeddings)
         tvars = tf.trainable_variables()
         initialized_variable_names = {}
         scaffold_fn = None
@@ -225,6 +227,8 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
                 mode=mode,
                 predictions={"sim_scores": sim_scores},
                 scaffold_fn=scaffold_fn)
+        elif mode == tf.estimator.ModeKeys.EVAL:
+            raise NotImplementedError
         else:
             tf.logging.error(f'mode `{mode}` not implemented yet')
         return output_spec
@@ -233,7 +237,7 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
 
 
 def create_model(bert_config, is_training, l_input_ids, r_input_ids,
-                 use_one_hot_embeddings):
+                 labels, use_one_hot_embeddings):
 
     with tf.variable_scope('bert', reuse=tf.AUTO_REUSE) as bert_scope:
         l_model = modeling.BertModel(
@@ -265,6 +269,129 @@ def create_model(bert_config, is_training, l_input_ids, r_input_ids,
 
         return sim_scores
 
+
+class SiameseBert(object):
+
+    def __init__(self,
+                 bert_model_type,
+                 bert_pretrained_dir,
+                 output_dir,
+                 use_tpu=False,
+                 tpu_name='mteoh',
+                 learning_rate=2e-5,
+                 num_train_epochs=3.0,
+                 warmup_proportion=0.1,
+                 train_batch_size=32,
+                 eval_batch_size=8,
+                 predict_batch_size=128,
+                 max_seq_length=128,
+                 save_checkpoints_steps=1000,
+                 iterations_per_loop=1000,
+                 num_tpu_cores=8):
+
+        # set up relevant intermediate vars
+        vocab_file = os.path.join(bert_pretrained_dir, 'vocab.txt')
+        config_file = os.path.join(bert_pretrained_dir, 'bert_config.json')
+        init_checkpoint = os.path.join(bert_pretrained_dir, 'bert_model.ckpt')
+        do_lower_case = bert_model_type.startswith('uncased')
+
+        # set up tokenizer
+        self.processor = FtmProcessor()
+        self.label_list = self.processor.get_labels()
+        self.tokenizer = tokenization.FullTokenizer(
+            vocab_file=vocab_file,
+            do_lower_case=do_lower_case)
+        self.max_seq_length = max_seq_length
+
+        # set up the RunConfig
+        tpu_cluster_resolver = None
+        if use_tpu:
+            tpu_cluster_resolver = \
+                tf.contrib.cluster_resolver.TPUClusterResolver(tpu_name)
+        self.run_config = tf.contrib.tpu.RunConfig(
+            cluster=tpu_cluster_resolver,
+            model_dir=output_dir,
+            save_checkpoints_steps=save_checkpoints_steps,
+            tpu_config=tf.contrib.tpu.TPUConfig(
+                iterations_per_loop=iterations_per_loop,
+                num_shards=num_tpu_cores,
+                per_host_input_for_training=\
+                    tf.contrib.tpu.InputPipelineConfig.PER_HOST_V2))
+
+        # TODO: add something for training data here
+
+        # make model function
+        self.model_fn = model_fn_builder(
+            bert_config=modeling.BertConfig.from_json_file(config_file),
+            num_labels=len(self.label_list),
+            init_checkpoint=init_checkpoint,
+            learning_rate=learning_rate,
+            # TODO: fill this in with something when we start training
+            num_train_steps=None,
+            num_warmup_steps=None,
+            use_tpu=use_tpu,
+            use_one_hot_embeddings=use_tpu)
+
+        # make estimator
+        self.estimator = tf.contrib.tpu.TPUEstimator(
+            use_tpu=use_tpu,
+            model_fn=self.model_fn,
+            config=self.run_config,
+            train_batch_size=train_batch_size,
+            eval_batch_size=eval_batch_size,
+            predict_batch_size=predict_batch_size)
+
+    def predict_pairs(self, l_queries, r_queries, labels):
+        """Given pairs of queries, computes similarity scores for each pair.
+
+        The ith query in `l_queries` is compared with the ith query in
+        `r_queries` to produce the ith score in `result`.
+
+        Args:
+            l_queries (list or pd.Series): contains queries, to be compared
+                with `r_queries`
+            r_queries: same properties as `l_queries`
+            labels (list or pd.Series): ith entry is 1 if ith pair of queries
+                belong to the same function type, 0 otherwise
+
+        Returns:
+            sim_scores (pd.Series): ith score measures similarity of
+                `l_queries[i]` and `r_queries[i]`
+        """
+
+        from time import time as tt
+        # set up features
+        print(f'preparing feats...')
+        start = tt()
+        pred_examples = self.processor._create_examples(
+            list(l_queries),
+            list(r_queries),
+            list(labels))
+        pred_features = convert_examples_to_features(
+            pred_examples, self.max_seq_length, self.tokenizer)
+        print(f'done preparing feats. time taken: {tt()-start}')
+
+        # make predict input function
+        print(f'preparing input fn...')
+        start = tt()
+        input_fn = input_fn_builder(
+            features=pred_features,
+            seq_length=self.max_seq_length,
+            is_training=False,
+            drop_remainder=False)
+        print(f'done preparing fn. time taken: {tt()-start}')
+
+        # run prediction
+        print(f'computing sim_scores...')
+        start = tt()
+        sim_scores = list(self.estimator.predict(input_fn=input_fn))
+        sim_scores = pd.DataFrame.from_records(sim_scores)
+        print(f'done computing sim_scores. time taken: {tt()-start}')
+        return sim_scores
+
+    def evaluate(self, l_queries, r_queries, labels):
+        raise NotImplementedError
+
 def main(_):
     # This should be a minimum working example
     tf.logging.set_verbosity(tf.logging.INFO)
@@ -278,79 +405,23 @@ def main(_):
     OUTPUT_DIR = 'gs://{}/bert/models/{}'.format(BUCKET, TASK)
     TASK_DATA_PATH = 'example_data/DATA_EXAMPLE_train_pairs.pkl'
 
-    # Model Hyper Parameters
-    TRAIN_BATCH_SIZE = 32
-    EVAL_BATCH_SIZE = 8
-    PRED_BATCH_SIZE = 128
-    LEARNING_RATE = 2e-5
-    NUM_TRAIN_EPOCHS = 3.0
-    WARMUP_PROPORTION = 0.1
-    MAX_SEQ_LENGTH = 128
-    # Model configs
-    SAVE_CHECKPOINTS_STEPS = 1000
-    ITERATIONS_PER_LOOP = 1000
-    NUM_TPU_CORES = 8
-    VOCAB_FILE = os.path.join(BERT_PRETRAINED_DIR, 'vocab.txt')
-    CONFIG_FILE = os.path.join(BERT_PRETRAINED_DIR, 'bert_config.json')
-    INIT_CHECKPOINT = os.path.join(BERT_PRETRAINED_DIR, 'bert_model.ckpt')
-    DO_LOWER_CASE = BERT_MODEL.startswith('uncased')
+    sb = SiameseBert(
+        bert_model_type=BERT_MODEL,
+        bert_pretrained_dir=BERT_PRETRAINED_DIR,
+        output_dir=OUTPUT_DIR,
+        use_tpu=FLAGS.use_tpu)
+    df_pairs = pickle.load(open(TASK_DATA_PATH, 'rb'))
+    l_queries = df_pairs['query']
+    r_queries = df_pairs['query_compare']
+    labels = df_pairs['y_class']
 
-    processor = FtmProcessor()
-    label_list = processor.get_labels()
-    tokenizer = tokenization.FullTokenizer(vocab_file=VOCAB_FILE,
-                                           do_lower_case=DO_LOWER_CASE)
+    # `sim_scores` has the similarity scores of the query pairs
+    from time import time as tt
+    print(f'doing sim_scores...')
+    start = tt()
+    sim_scores = sb.predict_pairs(l_queries, r_queries, labels)
+    print(f'finished sim_scores. time taken: {tt()-start}')
 
-    # TODO: just prediction for now
-
-    # run configuration for tpu if specified
-    tpu_cluster_resolver = None
-    if FLAGS.use_tpu:
-        tpu_cluster_resolver = tf.contrib.cluster_resolver.TPUClusterResolver('mteoh')
-    run_config = tf.contrib.tpu.RunConfig(
-        cluster=tpu_cluster_resolver,
-        model_dir=OUTPUT_DIR,
-        save_checkpoints_steps=SAVE_CHECKPOINTS_STEPS,
-        tpu_config=tf.contrib.tpu.TPUConfig(
-            iterations_per_loop=ITERATIONS_PER_LOOP,
-            num_shards=NUM_TPU_CORES,
-            per_host_input_for_training=tf.contrib.tpu.InputPipelineConfig.PER_HOST_V2))
-
-    # get prediction data
-    pred_examples = processor.get_pred_examples(TASK_DATA_PATH)
-    pred_features = convert_examples_to_features(
-        pred_examples, MAX_SEQ_LENGTH, tokenizer)
-
-    # model fn stuff
-    model_fn = model_fn_builder(
-        bert_config=modeling.BertConfig.from_json_file(CONFIG_FILE),
-        num_labels=len(label_list),
-        init_checkpoint=INIT_CHECKPOINT,
-        learning_rate=LEARNING_RATE,
-        num_train_steps=None,
-        num_warmup_steps=None,
-        use_tpu=FLAGS.use_tpu,
-        use_one_hot_embeddings=FLAGS.use_tpu)
-
-    # create estimator
-    estimator = tf.contrib.tpu.TPUEstimator(
-        use_tpu=FLAGS.use_tpu,
-        model_fn=model_fn,
-        config=run_config,
-        train_batch_size=TRAIN_BATCH_SIZE,
-        eval_batch_size=EVAL_BATCH_SIZE,
-        predict_batch_size=PRED_BATCH_SIZE)
-
-    # predict input function
-    predict_input_fn = input_fn_builder(
-        features=pred_features,
-        seq_length=MAX_SEQ_LENGTH,
-        is_training=False,
-        drop_remainder=False)
-
-    # get estimator to predict
-    result = list(estimator.predict(input_fn=predict_input_fn))
-    print(result)
 
 if __name__ == "__main__" :
-    flags.mark_flag_as_required("use_tpu")
     tf.app.run()
