@@ -7,6 +7,7 @@ import os
 import datetime
 import pickle
 import pandas as pd
+from time import time as tt
 
 flags = tf.flags
 FLAGS = flags.FLAGS
@@ -131,7 +132,6 @@ def input_fn_builder(features, seq_length, is_training, drop_remainder,
         all_r_input_ids.append(feature.r_input_ids)
         all_l_input_masks.append(feature.l_input_mask)
         all_r_input_masks.append(feature.r_input_mask)
-        # all_label_ids.append(feature.label_id)
 
     def input_fn(params):
         """The actual input function."""
@@ -179,81 +179,6 @@ def input_fn_builder(features, seq_length, is_training, drop_remainder,
         return d
 
     return input_fn
-
-
-def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
-                     num_train_steps, num_warmup_steps, use_tpu,
-                     use_one_hot_embeddings):
-
-    def model_fn(features, labels, mode, params):
-
-        # TODO: there's probably a few things i'm missing up here to make it work
-        tf.logging.info("*** Features ***")
-        for name in sorted(features.keys()):
-            tf.logging.info("  name = %s, shape = %s" % (name, features[name].shape))
-
-        l_input_ids = features["l_input_ids"]
-        r_input_ids = features["r_input_ids"]
-        l_input_mask = features["l_input_mask"]
-        r_input_mask = features["r_input_mask"]
-
-        is_training = (mode == tf.estimator.ModeKeys.TRAIN)
-
-        (total_loss, per_example_loss, logits, sim_scores, label_preds) = create_model(
-            bert_config, is_training, l_input_ids, r_input_ids,
-            l_input_mask, r_input_mask, labels, use_one_hot_embeddings)
-        tvars = tf.trainable_variables()
-        initialized_variable_names = {}
-        scaffold_fn = None
-        if init_checkpoint:
-            (assignment_map, initialized_variable_names
-            ) = modeling.get_assignment_map_from_checkpoint(tvars, init_checkpoint)
-            if use_tpu:
-
-                def tpu_scaffold():
-                    tf.train.init_from_checkpoint(init_checkpoint, assignment_map)
-                    return tf.train.Scaffold()
-
-                scaffold_fn = tpu_scaffold
-            else:
-                tf.train.init_from_checkpoint(init_checkpoint, assignment_map)
-
-        tf.logging.info("**** Trainable Variables ****")
-        for var in tvars:
-            init_string = ""
-            if var.name in initialized_variable_names:
-                init_string = ", *INIT_FROM_CKPT*"
-            tf.logging.info("  name = %s, shape = %s%s", var.name, var.shape,
-                            init_string)
-
-        if mode == tf.estimator.ModeKeys.PREDICT:
-            output_spec = tf.contrib.tpu.TPUEstimatorSpec(
-                mode=mode,
-                predictions={"sim_scores": sim_scores,
-                             "label_preds": label_preds},
-                scaffold_fn=scaffold_fn)
-        elif mode == tf.estimator.ModeKeys.EVAL:
-
-            def metric_fn(per_example_loss, labels, label_preds):
-                accuracy = tf.metrics.accuracy(
-                    labels=labels, predictions=label_preds)
-                loss = tf.metrics.mean(values=per_example_loss)
-                return {
-                    'eval_accuracy': accuracy,
-                    'eval_loss': loss}
-
-            eval_metrics = (metric_fn,
-                            [per_example_loss, labels, label_preds])
-            output_spec = tf.contrib.tpu.TPUEstimatorSpec(
-                mode=mode,
-                loss=total_loss,
-                eval_metrics=eval_metrics,
-                scaffold_fn=scaffold_fn)
-        else:
-            tf.logging.error(f'mode `{mode}` not implemented yet')
-        return output_spec
-
-    return model_fn
 
 
 def create_model(bert_config, is_training, l_input_ids, r_input_ids,
@@ -306,6 +231,7 @@ def create_model(bert_config, is_training, l_input_ids, r_input_ids,
 
 class SiameseBert(object):
 
+    # TODO: check these args to see if we've `self.`'d the necessary ones
     def __init__(self,
                  bert_model_type,
                  bert_pretrained_dir,
@@ -339,6 +265,11 @@ class SiameseBert(object):
 
         # configs related to train, eval, predict
         # TODO: include the others that get passed into __init__()
+        self.num_train_steps = None
+        self.num_warmup_steps = None
+        self.num_train_epochs = num_train_epochs
+        self.warmup_proportion = warmup_proportion
+        self.train_batch_size = train_batch_size
         self.eval_batch_size = eval_batch_size
 
         # set up the RunConfig
@@ -359,14 +290,11 @@ class SiameseBert(object):
         # TODO: add something for training data here
 
         # make model function
-        self.model_fn = model_fn_builder(
+        self.model_fn = self.model_fn_builder(
             bert_config=modeling.BertConfig.from_json_file(config_file),
             num_labels=len(self.label_list),
             init_checkpoint=init_checkpoint,
             learning_rate=learning_rate,
-            # TODO: fill this in with something when we start training
-            num_train_steps=None,
-            num_warmup_steps=None,
             use_tpu=use_tpu,
             use_one_hot_embeddings=use_tpu)
 
@@ -375,9 +303,97 @@ class SiameseBert(object):
             use_tpu=use_tpu,
             model_fn=self.model_fn,
             config=self.run_config,
-            train_batch_size=train_batch_size,
+            train_batch_size=self.train_batch_size,
             eval_batch_size=eval_batch_size,
             predict_batch_size=predict_batch_size)
+
+    def model_fn_builder(self, bert_config, num_labels, init_checkpoint,
+                         learning_rate, use_tpu, use_one_hot_embeddings):
+
+        def model_fn(features, labels, mode, params):
+
+            # TODO: there's probably a few things i'm missing up here to make it work
+            tf.logging.info("*** Features ***")
+            for name in sorted(features.keys()):
+                tf.logging.info("  name = %s, shape = %s" % (name, features[name].shape))
+
+            l_input_ids = features["l_input_ids"]
+            r_input_ids = features["r_input_ids"]
+            l_input_mask = features["l_input_mask"]
+            r_input_mask = features["r_input_mask"]
+
+            is_training = (mode == tf.estimator.ModeKeys.TRAIN)
+
+            (total_loss, per_example_loss, logits, sim_scores, label_preds) = create_model(
+                bert_config, is_training, l_input_ids, r_input_ids,
+                l_input_mask, r_input_mask, labels, use_one_hot_embeddings)
+            tvars = tf.trainable_variables()
+            initialized_variable_names = {}
+            scaffold_fn = None
+            if init_checkpoint:
+                (assignment_map, initialized_variable_names
+                ) = modeling.get_assignment_map_from_checkpoint(tvars, init_checkpoint)
+                if use_tpu:
+
+                    def tpu_scaffold():
+                        tf.train.init_from_checkpoint(init_checkpoint, assignment_map)
+                        return tf.train.Scaffold()
+
+                    scaffold_fn = tpu_scaffold
+                else:
+                    tf.train.init_from_checkpoint(init_checkpoint, assignment_map)
+
+            tf.logging.info("**** Trainable Variables ****")
+            for var in tvars:
+                init_string = ""
+                if var.name in initialized_variable_names:
+                    init_string = ", *INIT_FROM_CKPT*"
+                tf.logging.info("  name = %s, shape = %s%s", var.name, var.shape,
+                                init_string)
+
+            if mode == tf.estimator.ModeKeys.TRAIN:
+                assert self.num_train_steps is not None and \
+                    self.num_warmup_steps is not None, '''Please make sure that
+                    `self.num_train_steps` and `self.num_warmup_steps` are
+                    not None. They should be set based on the size of the
+                    training data, in `self.train()`'''
+                train_op = optimization.create_optimizer(
+                    total_loss, learning_rate, self.num_train_steps,
+                    self.num_warmup_steps, use_tpu)
+
+                output_spec = tf.contrib.tpu.TPUEstimatorSpec(
+                    mode=mode,
+                    loss=total_loss,
+                    train_op=train_op,
+                    scaffold_fn=scaffold_fn)
+            elif mode == tf.estimator.ModeKeys.PREDICT:
+                output_spec = tf.contrib.tpu.TPUEstimatorSpec(
+                    mode=mode,
+                    predictions={"sim_scores": sim_scores,
+                                 "label_preds": label_preds},
+                    scaffold_fn=scaffold_fn)
+            elif mode == tf.estimator.ModeKeys.EVAL:
+
+                def metric_fn(per_example_loss, labels, label_preds):
+                    accuracy = tf.metrics.accuracy(
+                        labels=labels, predictions=label_preds)
+                    loss = tf.metrics.mean(values=per_example_loss)
+                    return {
+                        'eval_accuracy': accuracy,
+                        'eval_loss': loss}
+
+                eval_metrics = (metric_fn,
+                                [per_example_loss, labels, label_preds])
+                output_spec = tf.contrib.tpu.TPUEstimatorSpec(
+                    mode=mode,
+                    loss=total_loss,
+                    eval_metrics=eval_metrics,
+                    scaffold_fn=scaffold_fn)
+            else:
+                tf.logging.error(f'mode `{mode}` not implemented yet')
+            return output_spec
+
+        return model_fn
 
     def predict_pairs(self, l_queries, r_queries):
         """Given pairs of queries, computes similarity scores for each pair.
@@ -395,7 +411,6 @@ class SiameseBert(object):
                 `l_queries[i]` and `r_queries[i]`
         """
 
-        from time import time as tt
         # set up features
         print(f'preparing feats...')
         start = tt()
@@ -442,6 +457,35 @@ class SiameseBert(object):
             steps=eval_steps)
         return eval_result
 
+    def train(self, l_queries, r_queries, labels):
+
+        # create train examples
+        train_examples = self.processor._create_examples(
+            list(l_queries),
+            list(r_queries))
+        # create train features
+        train_features = convert_examples_to_features(
+            train_examples, self.max_seq_length, self.tokenizer)
+
+        # TODO: do we need to round up?
+        self.num_train_steps = int(
+            len(train_examples) / self.train_batch_size * self.num_train_epochs)
+        self.num_warmup_steps = int(self.num_train_steps * self.warmup_proportion)
+        # create train input function
+        train_input_fn = input_fn_builder(
+            features=train_features,
+            seq_length=self.max_seq_length,
+            is_training=True,
+            drop_remainder=False,
+            labels=list(labels))
+
+        # estimator.train
+        self.estimator.train(
+            input_fn=train_input_fn,
+            max_steps=self.num_train_steps)
+
+        # TODO: where does the saved model go??
+
 
 def main(_):
     # This should be a minimum working example
@@ -466,18 +510,22 @@ def main(_):
     r_queries = df_pairs['query_compare']
     labels = df_pairs['y_class']
 
-    # `pred_results` has the similarity scores of the query pairs
-    from time import time as tt
-    print(f'doing pred_results...')
+    print(f'doing training...')
     start = tt()
-    pred_results = sb.predict_pairs(l_queries, r_queries)
-    print(f'finished pred_results. time taken: {tt()-start}')
+    sb.train(l_queries, r_queries, labels)
+    print(f'finished training. time take: {tt()-start}')
+
+    # `pred_results` has the similarity scores of the query pairs
+    # print(f'doing pred_results...')
+    # start = tt()
+    # pred_results = sb.predict_pairs(l_queries, r_queries)
+    # print(f'finished pred_results. time taken: {tt()-start}')
 
     # evaluate
-    print(f'running evaluate...')
-    start = tt()
-    eval_result = sb.evaluate(l_queries, r_queries, labels)
-    print(f'finished evaluating. time taken: {tt()-start}')
+    # print(f'running evaluate...')
+    # start = tt()
+    # eval_result = sb.evaluate(l_queries, r_queries, labels)
+    # print(f'finished evaluating. time taken: {tt()-start}')
 
 
 if __name__ == "__main__" :
