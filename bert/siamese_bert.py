@@ -8,6 +8,7 @@ import datetime
 import pickle
 import pandas as pd
 from time import time as tt
+from tensorflow.python import debug as tf_debug
 
 flags = tf.flags
 FLAGS = flags.FLAGS
@@ -24,6 +25,7 @@ del_all_flags(tf.flags.FLAGS)
 
 flags.DEFINE_bool("use_tpu", False, "Whether to use TPU or GPU/CPU.")
 flags.DEFINE_integer("predict_batch_size", 128, "Number of instances in a given batch.")
+flags.DEFINE_integer("num_train_epochs", 3, "Number of epochs to train over.")
 
 def convert_examples_to_features(examples, max_seq_length, tokenizer):
     features = []
@@ -146,27 +148,32 @@ def input_fn_builder(features, seq_length, is_training, drop_remainder,
             "l_input_ids":
                 tf.constant(
                     all_l_input_ids, shape=[num_examples, seq_length],
-                    dtype=tf.int32),
+                    dtype=tf.int32,
+                    name='l_input_ids'),
             "r_input_ids":
                 tf.constant(
                     all_r_input_ids, shape=[num_examples, seq_length],
-                    dtype=tf.int32),
+                    dtype=tf.int32,
+                    name='r_input_ids'),
             "l_input_mask":
                 tf.constant(
                     all_l_input_masks,
                     shape=[num_examples, seq_length],
-                    dtype=tf.int32),
+                    dtype=tf.int32,
+                    name='l_input_mask'),
             "r_input_mask":
                 tf.constant(
                     all_r_input_masks,
                     shape=[num_examples, seq_length],
-                    dtype=tf.int32)}
+                    dtype=tf.int32,
+                    name='r_input_mask')}
         labels_input = None
         if labels:
             labels_input = tf.constant(
                 labels,
                 shape=[num_examples],
-                dtype=tf.int32)
+                dtype=tf.int32,
+                name='labels')
         tensor_slices_arg = (feats_dict, labels_input) \
             if labels_input is not None else feats_dict
         d = tf.data.Dataset.from_tensor_slices(tensor_slices_arg)
@@ -213,20 +220,32 @@ def create_model(bert_config, is_training, l_input_ids, r_input_ids,
             sim_scores = tf.math.exp(l1_norm, name='exp')
             sim_scores = tf.clip_by_value(sim_scores, 1.0e-7, 1.0-1e-7,
                                           name='sim_scores')
-            label_preds = tf.math.round(sim_scores)
+            label_preds = tf.math.round(sim_scores, name='label_preds')
 
 
         with tf.variable_scope('loss'):
             logits = tf.math.add(tf.constant(1.0), -sim_scores)
             logits = tf.math.divide(sim_scores, logits)
-            logits = tf.math.log(logits)
+            logits = tf.math.log(logits, name='logits')
             per_example_loss, loss = None, None
             if labels is not None:
                 per_example_loss = tf.nn.sigmoid_cross_entropy_with_logits(
-                    labels=tf.cast(labels, dtype=tf.float32), logits=logits)
-                loss = tf.reduce_mean(per_example_loss)
+                    labels=tf.cast(labels, dtype=tf.float32), logits=logits,
+                    name='per_example_loss')
+                loss = tf.reduce_mean(per_example_loss, name='total_loss')
 
-            return (loss, per_example_loss, logits, sim_scores, label_preds)
+        merged_summaries = None
+        # TODO: summary stuff does not play nice with TPU
+        # with tf.name_scope('summaries'):
+        #     tf.summary.histogram('sim_scores_hist', sim_scores)
+        #     if per_example_loss is not None:
+        #         tf.summary.histogram('per_example_loss_hist', per_example_loss)
+        #     if loss is not None:
+        #         tf.summary.scalar('average_loss', loss)
+
+        #     merged_summaries = tf.summary.merge_all(name='network_summaries')
+        return (loss, per_example_loss, logits, sim_scores, label_preds,
+                merged_summaries)
 
 
 class SiameseBert(object):
@@ -247,7 +266,9 @@ class SiameseBert(object):
                  max_seq_length=128,
                  save_checkpoints_steps=1000,
                  iterations_per_loop=1000,
-                 num_tpu_cores=8):
+                 num_tpu_cores=8,
+                 use_debug=False,
+                 optimizer_logging=False):
 
         # set up relevant intermediate vars
         vocab_file = os.path.join(bert_pretrained_dir, 'vocab.txt')
@@ -287,8 +308,6 @@ class SiameseBert(object):
                 per_host_input_for_training=\
                     tf.contrib.tpu.InputPipelineConfig.PER_HOST_V2))
 
-        # TODO: add something for training data here
-
         # make model function
         self.model_fn = self.model_fn_builder(
             bert_config=modeling.BertConfig.from_json_file(config_file),
@@ -307,6 +326,10 @@ class SiameseBert(object):
             eval_batch_size=eval_batch_size,
             predict_batch_size=predict_batch_size)
 
+        # other things
+        self.use_debug = use_debug
+        self.optimizer_logging = optimizer_logging
+
     def model_fn_builder(self, bert_config, num_labels, init_checkpoint,
                          learning_rate, use_tpu, use_one_hot_embeddings):
 
@@ -324,7 +347,8 @@ class SiameseBert(object):
 
             is_training = (mode == tf.estimator.ModeKeys.TRAIN)
 
-            (total_loss, per_example_loss, logits, sim_scores, label_preds) = create_model(
+            (total_loss, per_example_loss, logits, sim_scores, label_preds,
+                merged_summaries) = create_model(
                 bert_config, is_training, l_input_ids, r_input_ids,
                 l_input_mask, r_input_mask, labels, use_one_hot_embeddings)
             tvars = tf.trainable_variables()
@@ -341,7 +365,8 @@ class SiameseBert(object):
 
                     scaffold_fn = tpu_scaffold
                 else:
-                    tf.train.init_from_checkpoint(init_checkpoint, assignment_map)
+                    with tf.name_scope('assignments'):
+                        tf.train.init_from_checkpoint(init_checkpoint, assignment_map)
 
             tf.logging.info("**** Trainable Variables ****")
             for var in tvars:
@@ -357,9 +382,13 @@ class SiameseBert(object):
                     `self.num_train_steps` and `self.num_warmup_steps` are
                     not None. They should be set based on the size of the
                     training data, in `self.train()`'''
-                train_op = optimization.create_optimizer(
-                    total_loss, learning_rate, self.num_train_steps,
-                    self.num_warmup_steps, use_tpu)
+                with tf.name_scope('optimization'):
+                    train_op = optimization.create_optimizer(
+                        total_loss, learning_rate, self.num_train_steps,
+                        self.num_warmup_steps, use_tpu, self.optimizer_logging)
+                    # TODO: fix summary logging since this appears in two places
+                    # and doesn't seem to play nicely with TPU?
+                    #tf.summary.merge_all()
 
                 output_spec = tf.contrib.tpu.TPUEstimatorSpec(
                     mode=mode,
@@ -395,6 +424,11 @@ class SiameseBert(object):
 
         return model_fn
 
+    def predict_single_pair(self, l_query, r_query):
+        """Returns output score of one pair of queries"""
+
+        return self.predict_pairs([l_query], [r_query])
+
     def predict_pairs(self, l_queries, r_queries):
         """Given pairs of queries, computes similarity scores for each pair.
 
@@ -428,7 +462,10 @@ class SiameseBert(object):
             features=pred_features,
             seq_length=self.max_seq_length,
             is_training=False,
-            drop_remainder=False)
+            # TODO: do something about this since TPU does not play nice with
+            # uneven batch sizes
+            drop_remainder=True)
+            #drop_remainder=False)
         print(f'done preparing fn. time taken: {tt()-start}')
 
         # run prediction
@@ -450,7 +487,10 @@ class SiameseBert(object):
             features=eval_features,
             seq_length=self.max_seq_length,
             is_training=False,
-            drop_remainder=False,
+            drop_remainder=True,
+            # TODO: do something about this since TPU does not play nice with
+            # uneven batch sizes
+            # drop_remainder=False,
             labels=list(labels))
         eval_result = self.estimator.evaluate(
             input_fn=eval_input_fn,
@@ -470,22 +510,28 @@ class SiameseBert(object):
         # TODO: do we need to round up?
         self.num_train_steps = int(
             len(train_examples) / self.train_batch_size * self.num_train_epochs)
+        tf.logging.info(f'num_train_steps: {self.num_train_steps}')
         self.num_warmup_steps = int(self.num_train_steps * self.warmup_proportion)
         # create train input function
         train_input_fn = input_fn_builder(
             features=train_features,
             seq_length=self.max_seq_length,
             is_training=True,
-            drop_remainder=False,
+            # TODO: do something about this since TPU does not play nice with
+            # uneven batch sizes
+            drop_remainder=True,
+            #drop_remainder=False,
             labels=list(labels))
+
+        hooks = None
+        if self.use_debug:
+            hooks = [tf_debug.LocalCLIDebugHook()]
 
         # estimator.train
         self.estimator.train(
             input_fn=train_input_fn,
-            max_steps=self.num_train_steps)
-
-        # TODO: where does the saved model go??
-
+            max_steps=self.num_train_steps,
+            hooks=hooks)
 
 def main(_):
     # This should be a minimum working example
@@ -504,11 +550,17 @@ def main(_):
         bert_model_type=BERT_MODEL,
         bert_pretrained_dir=BERT_PRETRAINED_DIR,
         output_dir=OUTPUT_DIR,
-        use_tpu=FLAGS.use_tpu)
+        use_tpu=FLAGS.use_tpu,
+        num_train_epochs=FLAGS.num_train_epochs)
     df_pairs = pickle.load(open(TASK_DATA_PATH, 'rb'))
     l_queries = df_pairs['query']
     r_queries = df_pairs['query_compare']
     labels = df_pairs['y_class']
+
+    # print(f'running evaluate...')
+    # start = tt()
+    # eval_result = sb.evaluate(l_queries, r_queries, labels)
+    # print(f'finished evaluating. time taken: {tt()-start}')
 
     print(f'doing training...')
     start = tt()
@@ -522,10 +574,10 @@ def main(_):
     # print(f'finished pred_results. time taken: {tt()-start}')
 
     # evaluate
-    # print(f'running evaluate...')
-    # start = tt()
-    # eval_result = sb.evaluate(l_queries, r_queries, labels)
-    # print(f'finished evaluating. time taken: {tt()-start}')
+    print(f'running evaluate...')
+    start = tt()
+    eval_result = sb.evaluate(l_queries, r_queries, labels)
+    print(f'finished evaluating. time taken: {tt()-start}')
 
 
 if __name__ == "__main__" :
