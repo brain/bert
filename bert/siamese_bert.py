@@ -188,64 +188,6 @@ def input_fn_builder(features, seq_length, is_training, drop_remainder,
     return input_fn
 
 
-def create_model(bert_config, is_training, l_input_ids, r_input_ids,
-                 l_input_mask, r_input_mask, labels, use_one_hot_embeddings):
-
-    with tf.variable_scope('bert', reuse=tf.AUTO_REUSE) as bert_scope:
-        l_model = modeling.BertModel(
-            config=bert_config,
-            is_training=is_training,
-            input_ids=l_input_ids,
-            input_mask=l_input_mask,
-            use_one_hot_embeddings=use_one_hot_embeddings,
-            scope=bert_scope,
-            reuse=tf.AUTO_REUSE)
-        r_model = modeling.BertModel(
-            config=bert_config,
-            is_training=is_training,
-            input_ids=r_input_ids,
-            input_mask=r_input_mask,
-            use_one_hot_embeddings=use_one_hot_embeddings,
-            scope=bert_scope,
-            reuse=tf.AUTO_REUSE)
-
-        l_output_layer = l_model.get_pooled_output()
-        r_output_layer = r_model.get_pooled_output()
-
-        with tf.variable_scope('similarity'):
-            l1_norm = -tf.norm(l_output_layer - r_output_layer,
-                               ord=1,
-                               axis=-1,
-                               name='abs_diff')
-            sim_scores = tf.math.exp(l1_norm, name='exp')
-            sim_scores = tf.clip_by_value(sim_scores, 1.0e-7, 1.0-1e-7,
-                                          name='sim_scores')
-            label_preds = tf.math.round(sim_scores, name='label_preds')
-
-
-        with tf.variable_scope('loss'):
-            logits = tf.math.add(tf.constant(1.0), -sim_scores)
-            logits = tf.math.divide(sim_scores, logits)
-            logits = tf.math.log(logits, name='logits')
-            per_example_loss, loss = None, None
-            if labels is not None:
-                per_example_loss = tf.nn.sigmoid_cross_entropy_with_logits(
-                    labels=tf.cast(labels, dtype=tf.float32), logits=logits,
-                    name='per_example_loss')
-                loss = tf.reduce_mean(per_example_loss, name='total_loss')
-
-        merged_summaries = None
-        # TODO: summary stuff does not play nice with TPU
-        # with tf.name_scope('summaries'):
-        #     tf.summary.histogram('sim_scores_hist', sim_scores)
-        #     if per_example_loss is not None:
-        #         tf.summary.histogram('per_example_loss_hist', per_example_loss)
-        #     if loss is not None:
-        #         tf.summary.scalar('average_loss', loss)
-
-        #     merged_summaries = tf.summary.merge_all(name='network_summaries')
-        return (loss, per_example_loss, logits, sim_scores, label_preds,
-                merged_summaries)
 
 
 class SiameseBert(object):
@@ -268,6 +210,7 @@ class SiameseBert(object):
                  iterations_per_loop=1000,
                  num_tpu_cores=8,
                  use_debug=False,
+                 feedforward_logging=False,
                  optimizer_logging=False):
 
         # set up relevant intermediate vars
@@ -328,7 +271,71 @@ class SiameseBert(object):
 
         # other things
         self.use_debug = use_debug
+        if use_tpu and (feedforward_logging or optimizer_logging):
+            tf.logging.error('Cannot use `feedforward_logging` or `optimizer_logging` when on TPU.')
+        self.feedforward_logging = feedforward_logging
         self.optimizer_logging = optimizer_logging
+
+    def create_model(self, bert_config, is_training, l_input_ids, r_input_ids,
+                     l_input_mask, r_input_mask, labels, use_one_hot_embeddings):
+
+        with tf.variable_scope('bert', reuse=tf.AUTO_REUSE) as bert_scope:
+            l_model = modeling.BertModel(
+                config=bert_config,
+                is_training=is_training,
+                input_ids=l_input_ids,
+                input_mask=l_input_mask,
+                use_one_hot_embeddings=use_one_hot_embeddings,
+                scope=bert_scope,
+                reuse=tf.AUTO_REUSE)
+            r_model = modeling.BertModel(
+                config=bert_config,
+                is_training=is_training,
+                input_ids=r_input_ids,
+                input_mask=r_input_mask,
+                use_one_hot_embeddings=use_one_hot_embeddings,
+                scope=bert_scope,
+                reuse=tf.AUTO_REUSE)
+
+            l_output_layer = l_model.get_pooled_output()
+            r_output_layer = r_model.get_pooled_output()
+
+            with tf.variable_scope('similarity'):
+                l1_norm = -tf.norm(l_output_layer - r_output_layer,
+                                   ord=1,
+                                   axis=-1,
+                                   name='abs_diff')
+                sim_scores = tf.math.exp(l1_norm * 1e-7, name='exp')
+                sim_scores = tf.clip_by_value(sim_scores, 1.0e-7, 1.0-1e-7,
+                                              name='sim_scores')
+                label_preds = tf.math.round(sim_scores, name='label_preds')
+
+
+            with tf.variable_scope('loss'):
+                logits = tf.math.add(tf.constant(1.0), -sim_scores)
+                logits = tf.math.divide(sim_scores, logits)
+                logits = tf.math.log(logits, name='logits')
+                per_example_loss, loss = None, None
+                if labels is not None:
+                    per_example_loss = tf.nn.sigmoid_cross_entropy_with_logits(
+                        labels=tf.cast(labels, dtype=tf.float32), logits=logits,
+                        name='per_example_loss')
+                    loss = tf.reduce_mean(per_example_loss, name='total_loss')
+
+            merged_summaries = None
+
+            if self.feedforward_logging:
+                with tf.name_scope('summaries'):
+                    tf.summary.histogram('sim_scores_hist', sim_scores)
+                    if per_example_loss is not None:
+                        tf.summary.histogram('per_example_loss_hist', per_example_loss)
+                    if loss is not None:
+                        tf.summary.scalar('average_loss', loss)
+
+                    merged_summaries = tf.summary.merge_all(name='network_summaries')
+
+            return (loss, per_example_loss, logits, sim_scores, label_preds,
+                    merged_summaries)
 
     def model_fn_builder(self, bert_config, num_labels, init_checkpoint,
                          learning_rate, use_tpu, use_one_hot_embeddings):
@@ -348,7 +355,7 @@ class SiameseBert(object):
             is_training = (mode == tf.estimator.ModeKeys.TRAIN)
 
             (total_loss, per_example_loss, logits, sim_scores, label_preds,
-                merged_summaries) = create_model(
+                merged_summaries) = self.create_model(
                 bert_config, is_training, l_input_ids, r_input_ids,
                 l_input_mask, r_input_mask, labels, use_one_hot_embeddings)
             tvars = tf.trainable_variables()
@@ -388,7 +395,8 @@ class SiameseBert(object):
                         self.num_warmup_steps, use_tpu, self.optimizer_logging)
                     # TODO: fix summary logging since this appears in two places
                     # and doesn't seem to play nicely with TPU?
-                    #tf.summary.merge_all()
+                    if self.optimizer_logging:
+                        tf.summary.merge_all()
 
                 output_spec = tf.contrib.tpu.TPUEstimatorSpec(
                     mode=mode,
