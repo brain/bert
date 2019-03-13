@@ -22,7 +22,8 @@ import re
 import tensorflow as tf
 
 
-def create_optimizer(loss, init_lr, num_train_steps, num_warmup_steps, use_tpu):
+def create_optimizer(loss, init_lr, num_train_steps, num_warmup_steps,
+                     use_tpu, optimizer_logging=False):
   """Creates an optimizer training op."""
   global_step = tf.train.get_or_create_global_step()
 
@@ -62,13 +63,17 @@ def create_optimizer(loss, init_lr, num_train_steps, num_warmup_steps, use_tpu):
       beta_1=0.9,
       beta_2=0.999,
       epsilon=1e-6,
-      exclude_from_weight_decay=["LayerNorm", "layer_norm", "bias"])
+      exclude_from_weight_decay=["LayerNorm", "layer_norm", "bias"],
+      optimizer_logging=optimizer_logging)
 
   if use_tpu:
     optimizer = tf.contrib.tpu.CrossShardOptimizer(optimizer)
 
   tvars = tf.trainable_variables()
   grads = tf.gradients(loss, tvars)
+  if optimizer_logging:
+    for grad, tvar in zip(grads, tvars):
+      tf.summary.histogram(f'pre_clip_grad_hist_`{tvar.name}`', grad)
 
   # This is how the model was pre-trained.
   (grads, _) = tf.clip_by_global_norm(grads, clip_norm=1.0)
@@ -94,7 +99,8 @@ class AdamWeightDecayOptimizer(tf.train.Optimizer):
                beta_2=0.999,
                epsilon=1e-6,
                exclude_from_weight_decay=None,
-               name="AdamWeightDecayOptimizer"):
+               name="AdamWeightDecayOptimizer",
+               optimizer_logging=False):
     """Constructs a AdamWeightDecayOptimizer."""
     super(AdamWeightDecayOptimizer, self).__init__(False, name)
 
@@ -104,6 +110,7 @@ class AdamWeightDecayOptimizer(tf.train.Optimizer):
     self.beta_2 = beta_2
     self.epsilon = epsilon
     self.exclude_from_weight_decay = exclude_from_weight_decay
+    self.optimizer_logging = optimizer_logging
 
   def apply_gradients(self, grads_and_vars, global_step=None, name=None):
     """See base class."""
@@ -127,34 +134,42 @@ class AdamWeightDecayOptimizer(tf.train.Optimizer):
           trainable=False,
           initializer=tf.zeros_initializer())
 
+      if self.optimizer_logging:
+        tf.summary.histogram(f'grad_hist_`{param.name}`', grad)
+
       # Standard Adam update.
-      next_m = (
-          tf.multiply(self.beta_1, m) + tf.multiply(1.0 - self.beta_1, grad))
-      next_v = (
-          tf.multiply(self.beta_2, v) + tf.multiply(1.0 - self.beta_2,
+      with tf.name_scope('adam_update'):
+        next_m = (
+            tf.multiply(self.beta_1, m) + tf.multiply(1.0 - self.beta_1, grad))
+        next_v = (
+            tf.multiply(self.beta_2, v) + tf.multiply(1.0 - self.beta_2,
                                                     tf.square(grad)))
 
-      update = next_m / (tf.sqrt(next_v) + self.epsilon)
+        update = next_m / (tf.sqrt(next_v) + self.epsilon)
 
-      # Just adding the square of the weights to the loss function is *not*
-      # the correct way of using L2 regularization/weight decay with Adam,
-      # since that will interact with the m and v parameters in strange ways.
-      #
-      # Instead we want ot decay the weights in a manner that doesn't interact
-      # with the m/v parameters. This is equivalent to adding the square
-      # of the weights to the loss with plain (non-momentum) SGD.
-      if self._do_use_weight_decay(param_name):
-        update += self.weight_decay_rate * param
+        # Just adding the square of the weights to the loss function is *not*
+        # the correct way of using L2 regularization/weight decay with Adam,
+        # since that will interact with the m and v parameters in strange ways.
+        #
+        # Instead we want ot decay the weights in a manner that doesn't interact
+        # with the m/v parameters. This is equivalent to adding the square
+        # of the weights to the loss with plain (non-momentum) SGD.
+        if self._do_use_weight_decay(param_name):
+            update += self.weight_decay_rate * param
 
-      update_with_lr = self.learning_rate * update
+        update_with_lr = self.learning_rate * update
+        if self.optimizer_logging:
+            tf.summary.histogram(f'update_with_lr_hist_`{param.name}`', update_with_lr)
 
-      next_param = param - update_with_lr
+        next_param = param - update_with_lr
+        if self.optimizer_logging:
+            tf.summary.histogram(f'next_param_hist_`{param.name}`', next_param)
 
-      assignments.extend(
-          [param.assign(next_param),
-           m.assign(next_m),
-           v.assign(next_v)])
-    return tf.group(*assignments, name=name)
+        assignments.extend(
+            [param.assign(next_param),
+            m.assign(next_m),
+            v.assign(next_v)])
+        return tf.group(*assignments, name=name)
 
   def _do_use_weight_decay(self, param_name):
     """Whether to use L2 weight decay for `param_name`."""
