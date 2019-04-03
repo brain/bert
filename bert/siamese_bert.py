@@ -121,6 +121,12 @@ class FtmProcessor(run_classifier.DataProcessor):
                 run_classifier.InputExample(guid, text_a=text_a, text_b=text_b))
         return examples
 
+    def _get_input_example(self, l_query, r_query):
+        text_a = tokenization.convert_to_unicode(l_query)
+        text_b = tokenization.convert_to_unicode(r_query)
+
+        return run_classifier.InputExample(None, text_a=text_a, text_b=text_b)
+
 
 def input_fn_builder(features, seq_length, is_training, drop_remainder,
                      labels=None):
@@ -190,7 +196,43 @@ def input_fn_builder(features, seq_length, is_training, drop_remainder,
 
     return input_fn
 
+def input_fn_builder_tfrecords(is_training, drop_remainder, max_seq_length,
+                               tfrecord_save_path, pad_length=0):
+    def input_fn(params):
+        """The actual input function."""
+        batch_size = params["batch_size"]
 
+        # TODO: parameterize this better later on
+
+        filenames = [tfrecord_save_path]
+        raw_dataset = tf.data.TFRecordDataset(filenames)
+        feature_description = {
+            'l_input_ids': tf.FixedLenFeature([max_seq_length], tf.int64, default_value=None),
+            'r_input_ids': tf.FixedLenFeature([max_seq_length], tf.int64, default_value=None),
+            'l_input_mask': tf.FixedLenFeature([max_seq_length], tf.int64, default_value=None),
+            'r_input_mask': tf.FixedLenFeature([max_seq_length], tf.int64, default_value=None)}
+        if is_training:
+            feature_description['label'] = tf.FixedLenFeature([], tf.int64, default_value=None)
+        def _parse(example_proto):
+            parsed_features = tf.parse_single_example(example_proto, feature_description)
+            if is_training:
+                return parsed_features, parsed_features['label']
+            else:
+                return parsed_features
+        d = raw_dataset.map(_parse)
+
+        if is_training:
+            d = d.repeat()
+            d = d.shuffle(buffer_size=100)
+
+        if pad_length and drop_remainder:
+            # hacky padding for batching so nothing actually gets dropped
+            d = d.concatenate(d.take(pad_length))
+
+        d = d.batch(batch_size=batch_size, drop_remainder=drop_remainder)
+        return d
+
+    return input_fn
 
 
 class SiameseBert(object):
@@ -219,7 +261,8 @@ class SiameseBert(object):
                  use_l1_norm_scaling=True,
                  l1_norm_scaling_factor=1e-4,
                  use_random_projection=False,
-                 random_projection_output_dim=128):
+                 random_projection_output_dim=128,
+                 sum_loss=False):
 
         # set up relevant intermediate vars
         vocab_file = os.path.join(bert_pretrained_dir, 'vocab.txt')
@@ -285,6 +328,7 @@ class SiameseBert(object):
         self.feedforward_logging = feedforward_logging
         self.optimizer_logging = optimizer_logging
         self.dataset_name = dataset_name
+        self.use_tpu = use_tpu
 
         if not (use_l1_norm_scaling ^ use_random_projection):
             tf.logging.error('Exactly one of `use_l1_norm_scaling` and `use_random_projection` must be True')
@@ -292,6 +336,7 @@ class SiameseBert(object):
         self.l1_norm_scaling_factor = l1_norm_scaling_factor
         self.use_random_projection = use_random_projection
         self.random_projection_output_dim = random_projection_output_dim
+        self.sum_loss = sum_loss
 
     def create_model(self, bert_config, is_training, l_input_ids, r_input_ids,
                      l_input_mask, r_input_mask, labels, use_one_hot_embeddings):
@@ -347,7 +392,10 @@ class SiameseBert(object):
                     per_example_loss = tf.nn.sigmoid_cross_entropy_with_logits(
                         labels=tf.cast(labels, dtype=tf.float32), logits=logits,
                         name='per_example_loss')
-                    loss = tf.reduce_mean(per_example_loss, name='total_loss')
+                    if self.sum_loss:
+                        loss = tf.reduce_sum(per_example_loss, name='total_loss')
+                    else:
+                        loss = tf.reduce_mean(per_example_loss, name='total_loss')
 
             merged_summaries = None
 
@@ -524,6 +572,30 @@ class SiameseBert(object):
         tf.logging.info(f'Pair Predictions: done computing pred_results. time taken: {tt()-start}')
         return pred_results
 
+    def predict_pairs_tfrecord(self, tfrecord_save_path, pad_length):
+        tf.logging.info(f'Pair Predictions: preparing input_fn...')
+        start = tt()
+        input_fn = input_fn_builder_tfrecords(
+            is_training=False,
+            drop_remainder=self.use_tpu,
+            max_seq_length=self.max_seq_length,
+            tfrecord_save_path=tfrecord_save_path,
+            pad_length=pad_length)
+        tf.logging.info(f'Pair Predictions: done preparing input_fn. time taken: {tt()-start}')
+
+        # run prediction
+        tf.logging.info(f'Pair Predictions: computing pred_results...')
+
+        hooks = None
+        if self.use_debug:
+            hooks = [tf_debug.LocalCLIDebugHook()]
+
+        start = tt()
+        pred_results = list(self.estimator.predict(input_fn=input_fn, hooks=hooks))
+        pred_results = pd.DataFrame.from_records(pred_results)
+        tf.logging.info(f'Pair Predictions: done computing pred_results. time taken: {tt()-start}')
+        return pred_results
+
     def evaluate(self, l_queries, r_queries, labels):
         eval_examples = self.processor._create_examples(
             list(l_queries),
@@ -547,6 +619,37 @@ class SiameseBert(object):
             steps=eval_steps)
         tf.logging.info(f'Finished evaluation! Time taken: {tt() - start}')
         return eval_result
+
+    def train_with_tfrecords(self, num_train_examples):
+        # TODO: do we need to round up?
+        self.num_train_steps = int(
+            num_train_examples / self.train_batch_size * self.num_train_epochs)
+        tf.logging.info(f'num_train_steps: {self.num_train_steps}')
+        self.num_warmup_steps = int(self.num_train_steps * self.warmup_proportion)
+
+        task_data_dir = f'gs://mteoh_siamese_bert_data/'
+        tfrecord_save_path = os.path.join(
+            task_data_dir,
+            f'{self.dataset_name}_train_pairs_{self.max_seq_length}.tfrecord')
+
+        train_input_fn = input_fn_builder_tfrecords(
+            is_training=True,
+            drop_remainder=self.use_tpu,
+            max_seq_length=self.max_seq_length,
+            tfrecord_save_path=tfrecord_save_path)
+
+        hooks = None
+        if self.use_debug:
+            hooks = [tf_debug.LocalCLIDebugHook()]
+
+        # estimator.train
+        tf.logging.info(f'Starting training...')
+        start = tt()
+        self.estimator.train(
+            input_fn=train_input_fn,
+            max_steps=self.num_train_steps,
+            hooks=hooks)
+        tf.logging.info(f'Training finished! Time take: {tt() - start}')
 
     def train(self, l_queries, r_queries, labels):
 
@@ -606,9 +709,30 @@ class SiameseBert(object):
         l_q, r_q = zip(*ordered_list_pairs)
         return list(l_q), list(r_q)
 
+    def predict_labels_tfrecord(self, df_input, df_ref, tfrecord_save_path):
+        num_pairs = len(df_input) * len(df_ref)
+        batch_remainder = num_pairs % self.predict_batch_size
+        pad_length = self.predict_batch_size - batch_remainder
+
+        pred_res = self.predict_pairs_tfrecord(tfrecord_save_path, pad_length)
+
+        sim_scores = pred_res.iloc[:num_pairs].sim_scores.values.reshape((len(df_input), -1))
+        ref_q_top_idxs = np.argmax(sim_scores, axis=-1)
+        ref_q_top_sim_scores = np.max(sim_scores, axis=-1)
+
+        df_pred_labels = pd.DataFrame({'ref_q_top_idx': ref_q_top_idxs})
+        df_pred_labels['label'] = df_pred_labels.ref_q_top_idx.apply(
+            lambda idx: df_ref.iloc[idx]['id'])
+        df_pred_labels['top_sim_score'] = ref_q_top_sim_scores
+        df_pred_labels['ranked_indices'] = list(np.argsort(-sim_scores))
+
+        return df_pred_labels
+
+
     def predict_labels(self, df_input, df_ref):
         l_q, r_q = self._generate_query_pairs(df_input['query'], df_ref['query'])
         num_pairs = len(df_input) * len(df_ref)
+
         assert len(l_q) == len(r_q) and len(l_q) == num_pairs
         # get number of queries to pad with
         batch_remainder = len(l_q) % self.predict_batch_size
@@ -644,6 +768,21 @@ class SiameseBert(object):
         return {'dev_accuracy': label_correctness.mean(),
                 'df_pred_labels': df_pred_labels}
 
+    def dev_accuracy_tfrecord(self, df_input, df_ref, tfrecord_save_path):
+        tf.logging.info('Starting dev accuracy...')
+        start = tt()
+        # make the predictions
+        df_pred_labels = self.predict_labels_tfrecord(
+            df_input, df_ref, tfrecord_save_path)
+
+        assert len(df_input) == len(df_pred_labels)
+
+        # compute the fraction that are correct
+        label_correctness = df_pred_labels['label'].reset_index(drop=True) \
+            == df_input['id'].reset_index(drop=True)
+        tf.logging.info(f'Finished computing dev accuracy. Time taken: {tt() - start}')
+        return {'dev_accuracy': label_correctness.mean(),
+                'df_pred_labels': df_pred_labels}
 def main(_):
     # This should be a minimum working example
     tf.logging.set_verbosity(tf.logging.INFO)
