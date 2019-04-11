@@ -197,15 +197,15 @@ def input_fn_builder(features, seq_length, is_training, drop_remainder,
     return input_fn
 
 def input_fn_builder_tfrecords(is_training, drop_remainder, max_seq_length,
-                               tfrecord_save_path, pad_length=0):
+                               tfrecord_save_paths, pad_length=0):
     def input_fn(params):
         """The actual input function."""
         batch_size = params["batch_size"]
 
         # TODO: parameterize this better later on
 
-        filenames = [tfrecord_save_path]
-        raw_dataset = tf.data.TFRecordDataset(filenames)
+        # TODO: very hacky to make backwards compatible; consider refactoring
+        raw_dataset = tf.data.TFRecordDataset(tfrecord_save_paths)
         feature_description = {
             'l_input_ids': tf.FixedLenFeature([max_seq_length], tf.int64, default_value=None),
             'r_input_ids': tf.FixedLenFeature([max_seq_length], tf.int64, default_value=None),
@@ -579,7 +579,7 @@ class SiameseBert(object):
             is_training=False,
             drop_remainder=self.use_tpu,
             max_seq_length=self.max_seq_length,
-            tfrecord_save_path=tfrecord_save_path,
+            tfrecord_save_paths=[tfrecord_save_path],
             pad_length=pad_length)
         tf.logging.info(f'Pair Predictions: done preparing input_fn. time taken: {tt()-start}')
 
@@ -627,16 +627,19 @@ class SiameseBert(object):
         tf.logging.info(f'num_train_steps: {self.num_train_steps}')
         self.num_warmup_steps = int(self.num_train_steps * self.warmup_proportion)
 
+        #TODO: consider refactoring and parameterizing
         task_data_dir = f'gs://mteoh_siamese_bert_data/'
-        tfrecord_save_path = os.path.join(
-            task_data_dir,
-            f'{self.dataset_name}_train_pairs_{self.max_seq_length}.tfrecord')
+        tfrecord_filenames_path = f'./example_data/{FLAGS.dataset}/tfrecord_filenames.txt'
+        raw_filenames = [line.rstrip('\n') for line in open(tfrecord_filenames_path)]
+        tfrecord_save_paths = [
+            os.path.join(task_data_dir, raw_filename)
+            for raw_filename in raw_filenames]
 
         train_input_fn = input_fn_builder_tfrecords(
             is_training=True,
             drop_remainder=self.use_tpu,
             max_seq_length=self.max_seq_length,
-            tfrecord_save_path=tfrecord_save_path)
+            tfrecord_save_paths=tfrecord_save_paths)
 
         hooks = None
         if self.use_debug:
