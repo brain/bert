@@ -198,6 +198,7 @@ def input_fn_builder(features, seq_length, is_training, drop_remainder,
 
 def input_fn_builder_tfrecords(is_training, drop_remainder, max_seq_length,
                                tfrecord_save_paths, pad_length=0):
+
     def input_fn(params):
         """The actual input function."""
         batch_size = params["batch_size"]
