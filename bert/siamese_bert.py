@@ -241,7 +241,6 @@ class SiameseBert(object):
                  use_debug=False,
                  feedforward_logging=False,
                  optimizer_logging=False,
-                 use_random_projection=False,
                  random_projection_output_dim=128,
                  sum_loss=False):
 
@@ -311,7 +310,6 @@ class SiameseBert(object):
         self.dataset_name = dataset_name
         self.use_tpu = use_tpu
 
-        self.use_random_projection = use_random_projection
         self.random_projection_output_dim = random_projection_output_dim
         self.sum_loss = sum_loss
 
@@ -340,13 +338,13 @@ class SiameseBert(object):
             r_output_layer = r_model.get_pooled_output()
 
             with tf.variable_scope('similarity'):
-                if self.use_random_projection:
-                    l_output_layer = tf.layers.dense(
-                        l_output_layer, self.random_projection_output_dim,
-                        name='random_projection')
-                    r_output_layer = tf.layers.dense(
-                        r_output_layer, self.random_projection_output_dim,
-                        name='random_projection', reuse=True)
+                l_output_layer = tf.layers.dense(
+                    l_output_layer, self.random_projection_output_dim,
+                    name='random_projection')
+                r_output_layer = tf.layers.dense(
+                    r_output_layer, self.random_projection_output_dim,
+                    name='random_projection', reuse=True)
+
                 l1_norm = -tf.norm(l_output_layer - r_output_layer,
                                    ord=1,
                                    axis=-1,
