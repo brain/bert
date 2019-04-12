@@ -13,23 +13,6 @@ from time import time as tt
 from tqdm import tqdm
 from tensorflow.python import debug as tf_debug
 
-flags = tf.flags
-FLAGS = flags.FLAGS
-
-def del_all_flags(FLAGS):
-    flags_dict = FLAGS._flags()
-    keys_list = [keys for keys in flags_dict]
-    for keys in keys_list:
-        FLAGS.__delattr__(keys)
-
-# Remove the flags from `run_classifier` since we're not using them in this
-# file
-del_all_flags(tf.flags.FLAGS)
-
-flags.DEFINE_bool("use_tpu", False, "Whether to use TPU or GPU/CPU.")
-flags.DEFINE_integer("predict_batch_size", 128, "Number of instances in a given batch.")
-flags.DEFINE_integer("num_train_epochs", 3, "Number of epochs to train over.")
-
 def convert_examples_to_features(examples, max_seq_length, tokenizer):
     features = []
 
@@ -79,7 +62,6 @@ def convert_single_example(ex_index, example, max_seq_length, tokenizer):
         l_input_mask=input_mask_a,
         r_input_mask=input_mask_b)
     return feature
-
 
 class InputFeaturesPair(object):
     """Single pair of features"""
@@ -787,52 +769,3 @@ class SiameseBert(object):
         tf.logging.info(f'Finished computing dev accuracy. Time taken: {tt() - start}')
         return {'dev_accuracy': label_correctness.mean(),
                 'df_pred_labels': df_pred_labels}
-def main(_):
-    # This should be a minimum working example
-    tf.logging.set_verbosity(tf.logging.INFO)
-    print('Setting up model and TPU...')
-
-    # Model and data path stuff
-    BERT_MODEL = 'uncased_L-12_H-768_A-12'
-    BERT_PRETRAINED_DIR = 'gs://cloud-tpu-checkpoints/bert/' + BERT_MODEL
-    BUCKET = 'bert_output_bucket_mteoh'
-    TASK = 'FTM'
-    OUTPUT_DIR = 'gs://{}/bert/models/{}'.format(BUCKET, TASK)
-    TASK_DATA_PATH = 'example_data/DATA_EXAMPLE_train_pairs.pkl'
-
-    sb = SiameseBert(
-        bert_model_type=BERT_MODEL,
-        bert_pretrained_dir=BERT_PRETRAINED_DIR,
-        output_dir=OUTPUT_DIR,
-        use_tpu=FLAGS.use_tpu,
-        num_train_epochs=FLAGS.num_train_epochs)
-    df_pairs = pickle.load(open(TASK_DATA_PATH, 'rb'))
-    l_queries = df_pairs['query']
-    r_queries = df_pairs['query_compare']
-    labels = df_pairs['y_class']
-
-    # print(f'running evaluate...')
-    # start = tt()
-    # eval_result = sb.evaluate(l_queries, r_queries, labels)
-    # print(f'finished evaluating. time taken: {tt()-start}')
-
-    print(f'doing training...')
-    start = tt()
-    sb.train(l_queries, r_queries, labels)
-    print(f'finished training. time take: {tt()-start}')
-
-    # `pred_results` has the similarity scores of the query pairs
-    # print(f'doing pred_results...')
-    # start = tt()
-    # pred_results = sb.predict_pairs(l_queries, r_queries)
-    # print(f'finished pred_results. time taken: {tt()-start}')
-
-    # evaluate
-    print(f'running evaluate...')
-    start = tt()
-    eval_result = sb.evaluate(l_queries, r_queries, labels)
-    print(f'finished evaluating. time taken: {tt()-start}')
-
-
-if __name__ == "__main__" :
-    tf.app.run()
