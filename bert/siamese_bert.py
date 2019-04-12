@@ -241,8 +241,6 @@ class SiameseBert(object):
                  use_debug=False,
                  feedforward_logging=False,
                  optimizer_logging=False,
-                 use_l1_norm_scaling=True,
-                 l1_norm_scaling_factor=1e-4,
                  use_random_projection=False,
                  random_projection_output_dim=128,
                  sum_loss=False):
@@ -313,10 +311,6 @@ class SiameseBert(object):
         self.dataset_name = dataset_name
         self.use_tpu = use_tpu
 
-        if not (use_l1_norm_scaling ^ use_random_projection):
-            tf.logging.error('Exactly one of `use_l1_norm_scaling` and `use_random_projection` must be True')
-        self.use_l1_norm_scaling = use_l1_norm_scaling
-        self.l1_norm_scaling_factor = l1_norm_scaling_factor
         self.use_random_projection = use_random_projection
         self.random_projection_output_dim = random_projection_output_dim
         self.sum_loss = sum_loss
@@ -357,9 +351,6 @@ class SiameseBert(object):
                                    ord=1,
                                    axis=-1,
                                    name='abs_diff')
-                if self.use_l1_norm_scaling:
-                    l1_norm = tf.math.scalar_mul(
-                        self.l1_norm_scaling_factor, l1_norm)
                 sim_scores = tf.math.exp(l1_norm, name='exp')
                 sim_scores = tf.clip_by_value(sim_scores, 1.0e-7, 1.0-1e-7,
                                               name='sim_scores')
