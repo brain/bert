@@ -612,7 +612,7 @@ class SiameseBert(object):
 
         #TODO: consider refactoring and parameterizing
         task_data_dir = f'gs://mteoh_siamese_bert_data/'
-        tfrecord_filenames_path = f'./example_data/{FLAGS.dataset}/tfrecord_filenames.txt'
+        tfrecord_filenames_path = f'./example_data/{self.dataset_name}/tfrecord_filenames.txt'
         raw_filenames = [line.rstrip('\n') for line in open(tfrecord_filenames_path)]
         tfrecord_save_paths = [
             os.path.join(task_data_dir, raw_filename)
