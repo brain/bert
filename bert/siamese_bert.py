@@ -13,23 +13,6 @@ from time import time as tt
 from tqdm import tqdm
 from tensorflow.python import debug as tf_debug
 
-flags = tf.flags
-FLAGS = flags.FLAGS
-
-def del_all_flags(FLAGS):
-    flags_dict = FLAGS._flags()
-    keys_list = [keys for keys in flags_dict]
-    for keys in keys_list:
-        FLAGS.__delattr__(keys)
-
-# Remove the flags from `run_classifier` since we're not using them in this
-# file
-del_all_flags(tf.flags.FLAGS)
-
-flags.DEFINE_bool("use_tpu", False, "Whether to use TPU or GPU/CPU.")
-flags.DEFINE_integer("predict_batch_size", 128, "Number of instances in a given batch.")
-flags.DEFINE_integer("num_train_epochs", 3, "Number of epochs to train over.")
-
 def convert_examples_to_features(examples, max_seq_length, tokenizer):
     features = []
 
@@ -79,7 +62,6 @@ def convert_single_example(ex_index, example, max_seq_length, tokenizer):
         l_input_mask=input_mask_a,
         r_input_mask=input_mask_b)
     return feature
-
 
 class InputFeaturesPair(object):
     """Single pair of features"""
@@ -259,9 +241,6 @@ class SiameseBert(object):
                  use_debug=False,
                  feedforward_logging=False,
                  optimizer_logging=False,
-                 use_l1_norm_scaling=True,
-                 l1_norm_scaling_factor=1e-4,
-                 use_random_projection=False,
                  random_projection_output_dim=128,
                  sum_loss=False):
 
@@ -331,11 +310,6 @@ class SiameseBert(object):
         self.dataset_name = dataset_name
         self.use_tpu = use_tpu
 
-        if not (use_l1_norm_scaling ^ use_random_projection):
-            tf.logging.error('Exactly one of `use_l1_norm_scaling` and `use_random_projection` must be True')
-        self.use_l1_norm_scaling = use_l1_norm_scaling
-        self.l1_norm_scaling_factor = l1_norm_scaling_factor
-        self.use_random_projection = use_random_projection
         self.random_projection_output_dim = random_projection_output_dim
         self.sum_loss = sum_loss
 
@@ -364,20 +338,17 @@ class SiameseBert(object):
             r_output_layer = r_model.get_pooled_output()
 
             with tf.variable_scope('similarity'):
-                if self.use_random_projection:
-                    l_output_layer = tf.layers.dense(
-                        l_output_layer, self.random_projection_output_dim,
-                        name='random_projection')
-                    r_output_layer = tf.layers.dense(
-                        r_output_layer, self.random_projection_output_dim,
-                        name='random_projection', reuse=True)
+                l_output_layer = tf.layers.dense(
+                    l_output_layer, self.random_projection_output_dim,
+                    name='random_projection')
+                r_output_layer = tf.layers.dense(
+                    r_output_layer, self.random_projection_output_dim,
+                    name='random_projection', reuse=True)
+
                 l1_norm = -tf.norm(l_output_layer - r_output_layer,
                                    ord=1,
                                    axis=-1,
                                    name='abs_diff')
-                if self.use_l1_norm_scaling:
-                    l1_norm = tf.math.scalar_mul(
-                        self.l1_norm_scaling_factor, l1_norm)
                 sim_scores = tf.math.exp(l1_norm, name='exp')
                 sim_scores = tf.clip_by_value(sim_scores, 1.0e-7, 1.0-1e-7,
                                               name='sim_scores')
@@ -630,7 +601,7 @@ class SiameseBert(object):
 
         #TODO: consider refactoring and parameterizing
         task_data_dir = f'gs://mteoh_siamese_bert_data/'
-        tfrecord_filenames_path = f'./example_data/{FLAGS.dataset}/tfrecord_filenames.txt'
+        tfrecord_filenames_path = f'./example_data/{self.dataset_name}/tfrecord_filenames.txt'
         raw_filenames = [line.rstrip('\n') for line in open(tfrecord_filenames_path)]
         tfrecord_save_paths = [
             os.path.join(task_data_dir, raw_filename)
@@ -787,52 +758,3 @@ class SiameseBert(object):
         tf.logging.info(f'Finished computing dev accuracy. Time taken: {tt() - start}')
         return {'dev_accuracy': label_correctness.mean(),
                 'df_pred_labels': df_pred_labels}
-def main(_):
-    # This should be a minimum working example
-    tf.logging.set_verbosity(tf.logging.INFO)
-    print('Setting up model and TPU...')
-
-    # Model and data path stuff
-    BERT_MODEL = 'uncased_L-12_H-768_A-12'
-    BERT_PRETRAINED_DIR = 'gs://cloud-tpu-checkpoints/bert/' + BERT_MODEL
-    BUCKET = 'bert_output_bucket_mteoh'
-    TASK = 'FTM'
-    OUTPUT_DIR = 'gs://{}/bert/models/{}'.format(BUCKET, TASK)
-    TASK_DATA_PATH = 'example_data/DATA_EXAMPLE_train_pairs.pkl'
-
-    sb = SiameseBert(
-        bert_model_type=BERT_MODEL,
-        bert_pretrained_dir=BERT_PRETRAINED_DIR,
-        output_dir=OUTPUT_DIR,
-        use_tpu=FLAGS.use_tpu,
-        num_train_epochs=FLAGS.num_train_epochs)
-    df_pairs = pickle.load(open(TASK_DATA_PATH, 'rb'))
-    l_queries = df_pairs['query']
-    r_queries = df_pairs['query_compare']
-    labels = df_pairs['y_class']
-
-    # print(f'running evaluate...')
-    # start = tt()
-    # eval_result = sb.evaluate(l_queries, r_queries, labels)
-    # print(f'finished evaluating. time taken: {tt()-start}')
-
-    print(f'doing training...')
-    start = tt()
-    sb.train(l_queries, r_queries, labels)
-    print(f'finished training. time take: {tt()-start}')
-
-    # `pred_results` has the similarity scores of the query pairs
-    # print(f'doing pred_results...')
-    # start = tt()
-    # pred_results = sb.predict_pairs(l_queries, r_queries)
-    # print(f'finished pred_results. time taken: {tt()-start}')
-
-    # evaluate
-    print(f'running evaluate...')
-    start = tt()
-    eval_result = sb.evaluate(l_queries, r_queries, labels)
-    print(f'finished evaluating. time taken: {tt()-start}')
-
-
-if __name__ == "__main__" :
-    tf.app.run()
