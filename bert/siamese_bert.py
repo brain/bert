@@ -3,6 +3,7 @@ import modeling
 import optimization
 import run_classifier
 import tokenization
+import featurization
 import os
 import datetime
 import pickle
@@ -12,68 +13,6 @@ import itertools
 from time import time as tt
 from tqdm import tqdm
 from tensorflow.python import debug as tf_debug
-
-def convert_examples_to_features(examples, max_seq_length, tokenizer):
-    features = []
-
-    for (ex_index, example) in tqdm(enumerate(examples)):
-        feature = convert_single_example(ex_index, example, max_seq_length,
-                                         tokenizer)
-        features.append(feature)
-    return features
-
-def convert_single_example(ex_index, example, max_seq_length, tokenizer):
-    """Converts single `InputExample` into a single `InputFeaturesPair`. This
-    differs from `run_classifier.convert_single_example()` in that the two texts
-    are not encoded into the same object"""
-    tokens_a = tokenizer.tokenize(example.text_a)
-    tokens_b = tokenizer.tokenize(example.text_b)
-
-    if len(tokens_a) > max_seq_length - 2:
-        tokens_a = tokens_a[0:(max_seq_length - 2)]
-    if len(tokens_b) > max_seq_length - 2:
-        tokens_b = tokens_b[0:(max_seq_length - 2)]
-
-    tokens_a = ["[CLS]"] + tokens_a + ["[SEP]"]
-    tokens_b = ["[CLS]"] + tokens_b + ["[SEP]"]
-
-    input_ids_a = tokenizer.convert_tokens_to_ids(tokens_a)
-    input_ids_b = tokenizer.convert_tokens_to_ids(tokens_b)
-
-    input_mask_a = [1] * len(input_ids_a)
-    input_mask_b = [1] * len(input_ids_b)
-
-    while len(input_ids_a) < max_seq_length:
-        input_ids_a.append(0)
-        input_mask_a.append(0)
-
-    while len(input_ids_b) < max_seq_length:
-        input_ids_b.append(0)
-        input_mask_b.append(0)
-
-    assert len(input_ids_a) == max_seq_length
-    assert len(input_mask_a) == max_seq_length
-    assert len(input_ids_b) == max_seq_length
-    assert len(input_mask_b) == max_seq_length
-
-    feature = InputFeaturesPair(
-        l_input_ids=input_ids_a,
-        r_input_ids=input_ids_b,
-        l_input_mask=input_mask_a,
-        r_input_mask=input_mask_b)
-    return feature
-
-class InputFeaturesPair(object):
-    """Single pair of features"""
-    def __init__(self,
-                 l_input_ids,
-                 r_input_ids,
-                 l_input_mask,
-                 r_input_mask):
-        self.l_input_ids = l_input_ids
-        self.r_input_ids = r_input_ids
-        self.l_input_mask = l_input_mask
-        self.r_input_mask = r_input_mask
 
 class FtmProcessor(run_classifier.DataProcessor):
     def get_labels(self):
@@ -514,7 +453,7 @@ class SiameseBert(object):
         pred_examples = self.processor._create_examples(
             list(l_queries),
             list(r_queries))
-        pred_features = convert_examples_to_features(
+        pred_features = featurization.convert_examples_to_features(
             pred_examples, self.max_seq_length, self.tokenizer)
         tf.logging.info(f'Pair Predictions: finished preparing features. Time taken: {tt()-start}')
 
@@ -572,7 +511,7 @@ class SiameseBert(object):
         eval_examples = self.processor._create_examples(
             list(l_queries),
             list(r_queries))
-        eval_features = convert_examples_to_features(
+        eval_features = featurization.convert_examples_to_features(
             eval_examples, self.max_seq_length, self.tokenizer)
         eval_steps = int(len(eval_examples) / self.eval_batch_size)
         eval_input_fn = input_fn_builder(
@@ -643,7 +582,7 @@ class SiameseBert(object):
                 list(l_queries),
                 list(r_queries))
             # create train features
-            train_features = convert_examples_to_features(
+            train_features = featurization.convert_examples_to_features(
                 train_examples, self.max_seq_length, self.tokenizer)
             pickle.dump(train_features, open(feats_path, 'wb'), -1)
         tf.logging.info(f'Done preparing training features. Time taken: {tt() - start}')
