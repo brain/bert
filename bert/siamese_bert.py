@@ -3,111 +3,17 @@ import modeling
 import optimization
 import run_classifier
 import tokenization
+import featurization
 import os
 import datetime
 import pickle
 import pandas as pd
 import numpy as np
 import itertools
+from ftm_processor import FtmProcessor
 from time import time as tt
 from tqdm import tqdm
 from tensorflow.python import debug as tf_debug
-
-def convert_examples_to_features(examples, max_seq_length, tokenizer):
-    features = []
-
-    for (ex_index, example) in tqdm(enumerate(examples)):
-        feature = convert_single_example(ex_index, example, max_seq_length,
-                                         tokenizer)
-        features.append(feature)
-    return features
-
-def convert_single_example(ex_index, example, max_seq_length, tokenizer):
-    """Converts single `InputExample` into a single `InputFeaturesPair`. This
-    differs from `run_classifier.convert_single_example()` in that the two texts
-    are not encoded into the same object"""
-    tokens_a = tokenizer.tokenize(example.text_a)
-    tokens_b = tokenizer.tokenize(example.text_b)
-
-    if len(tokens_a) > max_seq_length - 2:
-        tokens_a = tokens_a[0:(max_seq_length - 2)]
-    if len(tokens_b) > max_seq_length - 2:
-        tokens_b = tokens_b[0:(max_seq_length - 2)]
-
-    tokens_a = ["[CLS]"] + tokens_a + ["[SEP]"]
-    tokens_b = ["[CLS]"] + tokens_b + ["[SEP]"]
-
-    input_ids_a = tokenizer.convert_tokens_to_ids(tokens_a)
-    input_ids_b = tokenizer.convert_tokens_to_ids(tokens_b)
-
-    input_mask_a = [1] * len(input_ids_a)
-    input_mask_b = [1] * len(input_ids_b)
-
-    while len(input_ids_a) < max_seq_length:
-        input_ids_a.append(0)
-        input_mask_a.append(0)
-
-    while len(input_ids_b) < max_seq_length:
-        input_ids_b.append(0)
-        input_mask_b.append(0)
-
-    assert len(input_ids_a) == max_seq_length
-    assert len(input_mask_a) == max_seq_length
-    assert len(input_ids_b) == max_seq_length
-    assert len(input_mask_b) == max_seq_length
-
-    feature = InputFeaturesPair(
-        l_input_ids=input_ids_a,
-        r_input_ids=input_ids_b,
-        l_input_mask=input_mask_a,
-        r_input_mask=input_mask_b)
-    return feature
-
-class InputFeaturesPair(object):
-    """Single pair of features"""
-    def __init__(self,
-                 l_input_ids,
-                 r_input_ids,
-                 l_input_mask,
-                 r_input_mask):
-        self.l_input_ids = l_input_ids
-        self.r_input_ids = r_input_ids
-        self.l_input_mask = l_input_mask
-        self.r_input_mask = r_input_mask
-
-class FtmProcessor(run_classifier.DataProcessor):
-    def get_labels(self):
-        """See base class"""
-        return [0, 1]
-
-    def get_pred_examples(self, pair_cache_path):
-        pairs_df = pickle.load(open(pair_cache_path, 'rb'))
-        l_query_list = pairs_df['query'].values
-        r_query_list = pairs_df['query_compare'].values
-        labels = pairs_df['y_class'].values
-        return self._create_examples(
-            l_query_list, r_query_list)
-
-    def _create_examples(self, l_query_list, r_query_list):
-        """Creates example query pairs"""
-        assert len(l_query_list) == len(r_query_list)
-
-        examples = []
-        for i, query_pair_info in tqdm(enumerate(zip(l_query_list,
-                                                r_query_list))):
-            l_query, r_query = query_pair_info
-            guid = '%s' %(i)
-            text_a = tokenization.convert_to_unicode(l_query)
-            text_b = tokenization.convert_to_unicode(r_query)
-            examples.append(
-                run_classifier.InputExample(guid, text_a=text_a, text_b=text_b))
-        return examples
-
-    def _get_input_example(self, l_query, r_query):
-        text_a = tokenization.convert_to_unicode(l_query)
-        text_b = tokenization.convert_to_unicode(r_query)
-
-        return run_classifier.InputExample(None, text_a=text_a, text_b=text_b)
 
 
 def input_fn_builder(features, seq_length, is_training, drop_remainder,
@@ -506,6 +412,7 @@ class SiameseBert(object):
         Returns:
             sim_scores (pd.Series): ith score measures similarity of
                 `l_queries[i]` and `r_queries[i]`
+
         """
 
         # set up features
@@ -514,7 +421,7 @@ class SiameseBert(object):
         pred_examples = self.processor._create_examples(
             list(l_queries),
             list(r_queries))
-        pred_features = convert_examples_to_features(
+        pred_features = featurization.convert_examples_to_features(
             pred_examples, self.max_seq_length, self.tokenizer)
         tf.logging.info(f'Pair Predictions: finished preparing features. Time taken: {tt()-start}')
 
@@ -545,6 +452,13 @@ class SiameseBert(object):
         return pred_results
 
     def predict_pairs_tfrecord(self, tfrecord_save_path, pad_length):
+        """Returns similarity scores based on pairs in the given tfrecord file.
+
+        We assume that one query (e.g. left is 'l') is represented with features
+        'l_input_ids' and 'l_input_mask'. Same for the right ('r') query.
+
+        """
+
         tf.logging.info(f'Pair Predictions: preparing input_fn...')
         start = tt()
         input_fn = input_fn_builder_tfrecords(
@@ -569,20 +483,28 @@ class SiameseBert(object):
         return pred_results
 
     def evaluate(self, l_queries, r_queries, labels):
+        """Given query pairs provided by l_queries and r_queries, evaluates the
+        accuracy of the pairwise prediction from siamese BERT.
+
+        l_queries, r_queries, and label are some iterable that can be turned
+        into a list. e.g. pd.Series.
+
+        """
+        # TODO: make a tfrecord version of this
+
         eval_examples = self.processor._create_examples(
             list(l_queries),
             list(r_queries))
-        eval_features = convert_examples_to_features(
+        eval_features = featurization.convert_examples_to_features(
             eval_examples, self.max_seq_length, self.tokenizer)
         eval_steps = int(len(eval_examples) / self.eval_batch_size)
         eval_input_fn = input_fn_builder(
             features=eval_features,
             seq_length=self.max_seq_length,
             is_training=False,
-            drop_remainder=True,
-            # TODO: do something about this since TPU does not play nice with
-            # uneven batch sizes
-            # drop_remainder=False,
+            drop_remainder=self.use_tpu,
+            # TODO: add some padding so that we're not worried about
+            #   dropping the remainder on the TPU
             labels=list(labels))
         tf.logging.info(f'Starting evaluation...')
         start = tt()
@@ -593,13 +515,23 @@ class SiameseBert(object):
         return eval_result
 
     def train_with_tfrecords(self, num_train_examples):
+        """Train siamese BERT model using tfrecord files indicated by
+        `self.dataset_name`.
+
+        For how these tfrecord files are created, see `s_bert_create_tfrecord_barches.py`
+
+        """
+
+        # TODO: is there a way we can more easily pass `num_train_examples` from
+        #   from the function that calls this?
         # TODO: do we need to round up?
         self.num_train_steps = int(
             num_train_examples / self.train_batch_size * self.num_train_epochs)
         tf.logging.info(f'num_train_steps: {self.num_train_steps}')
         self.num_warmup_steps = int(self.num_train_steps * self.warmup_proportion)
 
-        #TODO: consider refactoring and parameterizing
+        # TODO: consider refactoring and parameterizing
+        # TODO: you can replace task_data_dir with something from train_ftm.py script
         task_data_dir = f'gs://mteoh_siamese_bert_data/'
         tfrecord_filenames_path = f'./example_data/{self.dataset_name}/tfrecord_filenames.txt'
         raw_filenames = [line.rstrip('\n') for line in open(tfrecord_filenames_path)]
@@ -627,12 +559,19 @@ class SiameseBert(object):
         tf.logging.info(f'Training finished! Time take: {tt() - start}')
 
     def train(self, l_queries, r_queries, labels):
+        """Train siamese BERT model based on labeled training pairs provided by
+        `l_queries`, `r_queries`, and `labels`.
+
+        `l_queries`, `r_queries`, and `labels` are iterables that can be turned
+        into a list, (e.g. pd.Series)
+
+        """
 
         # create train examples
         tf.logging.info(f'Preparing training features...')
         start = tt()
 
-        # feats_path = './train_feats_cache_BERT_DATA_001.pkl'
+        # TODO: is there a better way of parameterizing this?
         feats_path = f'./example_data/{self.dataset_name}/train_feats_cache_{self.dataset_name}.pkl'
         tf.logging.info(f'feats_path = {feats_path}')
         if os.path.exists(feats_path):
@@ -643,7 +582,7 @@ class SiameseBert(object):
                 list(l_queries),
                 list(r_queries))
             # create train features
-            train_features = convert_examples_to_features(
+            train_features = featurization.convert_examples_to_features(
                 train_examples, self.max_seq_length, self.tokenizer)
             pickle.dump(train_features, open(feats_path, 'wb'), -1)
         tf.logging.info(f'Done preparing training features. Time taken: {tt() - start}')
@@ -658,10 +597,7 @@ class SiameseBert(object):
             features=train_features,
             seq_length=self.max_seq_length,
             is_training=True,
-            # TODO: do something about this since TPU does not play nice with
-            # uneven batch sizes
-            drop_remainder=True,
-            #drop_remainder=False,
+            drop_remainder=self.use_tpu,
             labels=list(labels))
 
         hooks = None
@@ -678,6 +614,16 @@ class SiameseBert(object):
         tf.logging.info(f'Training finished! Time take: {tt() - start}')
 
     def _generate_query_pairs(self, input_q, ref_q):
+        """Generate query pairs given by `input_q` and `ref_q`. The query pairs
+        are generated in an order that make label prediction easy to do.
+
+        e.g. input_q = [a, b, c]; ref_q = [1, 2]
+
+        Order of pairs:
+                [(a, 1), (a, 2), (b, 1), (b, 2), (c, 1), (c, 2)]
+
+        """
+
         ordered_list_pairs = list(itertools.product(input_q, ref_q))
         # TODO: this is not very memory efficient, so we need a better way
         # to handle large numbers of pairs
@@ -685,6 +631,15 @@ class SiameseBert(object):
         return list(l_q), list(r_q)
 
     def predict_labels_tfrecord(self, df_input, df_ref, tfrecord_save_path):
+        """Predict labels from input queries (left queries in tfrecord) with
+        right queries in tfrecord as reference.
+
+        See self.predict_labels() for how prediction works.
+
+        """
+
+        # TODO: we don't actually need `df_input` and `df_ref`, just their
+        #   lengths
         num_pairs = len(df_input) * len(df_ref)
         batch_remainder = num_pairs % self.predict_batch_size
         pad_length = self.predict_batch_size - batch_remainder
@@ -705,6 +660,13 @@ class SiameseBert(object):
 
 
     def predict_labels(self, df_input, df_ref):
+        """Predicts the labels of the queries in `df_input` using queries in `df_ref`
+
+        For each query in `df_input` our "prediction" is the label of the most
+        similar query in `df_ref`.
+
+        """
+
         l_q, r_q = self._generate_query_pairs(df_input['query'], df_ref['query'])
         num_pairs = len(df_input) * len(df_ref)
 
@@ -729,6 +691,11 @@ class SiameseBert(object):
         return df_pred_labels
 
     def dev_accuracy(self, df_input, df_ref):
+        """Measures the fraction of labels in `df_input` that are correctly
+        that are correctly predicted (i.e. labels predicted using `df_ref`).
+
+        """
+
         tf.logging.info('Starting dev accuracy...')
         start = tt()
         # make the predictions
@@ -744,6 +711,11 @@ class SiameseBert(object):
                 'df_pred_labels': df_pred_labels}
 
     def dev_accuracy_tfrecord(self, df_input, df_ref, tfrecord_save_path):
+        """Computes dev accuracy in the same way as self.dev_accuracy, but uses
+        tf records to load the data (given by tfrecord_save_path).
+
+        """
+
         tf.logging.info('Starting dev accuracy...')
         start = tt()
         # make the predictions
