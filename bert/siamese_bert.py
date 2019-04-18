@@ -531,6 +531,7 @@ class SiameseBert(object):
         self.num_warmup_steps = int(self.num_train_steps * self.warmup_proportion)
 
         # TODO: consider refactoring and parameterizing
+        # TODO: you can replace task_data_dir with something from train_ftm.py script
         task_data_dir = f'gs://mteoh_siamese_bert_data/'
         tfrecord_filenames_path = f'./example_data/{self.dataset_name}/tfrecord_filenames.txt'
         raw_filenames = [line.rstrip('\n') for line in open(tfrecord_filenames_path)]
