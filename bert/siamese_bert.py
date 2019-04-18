@@ -412,6 +412,7 @@ class SiameseBert(object):
         Returns:
             sim_scores (pd.Series): ith score measures similarity of
                 `l_queries[i]` and `r_queries[i]`
+
         """
 
         # set up features
@@ -451,6 +452,13 @@ class SiameseBert(object):
         return pred_results
 
     def predict_pairs_tfrecord(self, tfrecord_save_path, pad_length):
+        """Returns similarity scores based on pairs in the given tfrecord file.
+
+        We assume that one query (e.g. left is 'l') is represented with features
+        'l_input_ids' and 'l_input_mask'. Same for the right ('r') query.
+
+        """
+
         tf.logging.info(f'Pair Predictions: preparing input_fn...')
         start = tt()
         input_fn = input_fn_builder_tfrecords(
@@ -475,6 +483,15 @@ class SiameseBert(object):
         return pred_results
 
     def evaluate(self, l_queries, r_queries, labels):
+        """Given query pairs provided by l_queries and r_queries, evaluates the
+        accuracy of the pairwise prediction from siamese BERT.
+
+        l_queries, r_queries, and label are some iterable that can be turned
+        into a list. e.g. pd.Series.
+
+        """
+        # TODO: make a tfrecord version of this
+
         eval_examples = self.processor._create_examples(
             list(l_queries),
             list(r_queries))
@@ -485,10 +502,9 @@ class SiameseBert(object):
             features=eval_features,
             seq_length=self.max_seq_length,
             is_training=False,
-            drop_remainder=True,
-            # TODO: do something about this since TPU does not play nice with
-            # uneven batch sizes
-            # drop_remainder=False,
+            drop_remainder=self.use_tpu,
+            # TODO: add some padding so that we're not worried about
+            #   dropping the remainder on the TPU
             labels=list(labels))
         tf.logging.info(f'Starting evaluation...')
         start = tt()
@@ -499,13 +515,22 @@ class SiameseBert(object):
         return eval_result
 
     def train_with_tfrecords(self, num_train_examples):
+        """Train siamese BERT model using tfrecord files indicated by
+        `self.dataset_name`.
+
+        For how these tfrecord files are created, see `s_bert_create_tfrecord_barches.py`
+
+        """
+
+        # TODO: is there a way we can more easily pass `num_train_examples` from
+        #   from the function that calls this?
         # TODO: do we need to round up?
         self.num_train_steps = int(
             num_train_examples / self.train_batch_size * self.num_train_epochs)
         tf.logging.info(f'num_train_steps: {self.num_train_steps}')
         self.num_warmup_steps = int(self.num_train_steps * self.warmup_proportion)
 
-        #TODO: consider refactoring and parameterizing
+        # TODO: consider refactoring and parameterizing
         task_data_dir = f'gs://mteoh_siamese_bert_data/'
         tfrecord_filenames_path = f'./example_data/{self.dataset_name}/tfrecord_filenames.txt'
         raw_filenames = [line.rstrip('\n') for line in open(tfrecord_filenames_path)]
@@ -533,12 +558,19 @@ class SiameseBert(object):
         tf.logging.info(f'Training finished! Time take: {tt() - start}')
 
     def train(self, l_queries, r_queries, labels):
+        """Train siamese BERT model based on labeled training pairs provided by
+        `l_queries`, `r_queries`, and `labels`.
+
+        `l_queries`, `r_queries`, and `labels` are iterables that can be turned
+        into a list, (e.g. pd.Series)
+
+        """
 
         # create train examples
         tf.logging.info(f'Preparing training features...')
         start = tt()
 
-        # feats_path = './train_feats_cache_BERT_DATA_001.pkl'
+        # TODO: is there a better way of parameterizing this?
         feats_path = f'./example_data/{self.dataset_name}/train_feats_cache_{self.dataset_name}.pkl'
         tf.logging.info(f'feats_path = {feats_path}')
         if os.path.exists(feats_path):
@@ -564,10 +596,7 @@ class SiameseBert(object):
             features=train_features,
             seq_length=self.max_seq_length,
             is_training=True,
-            # TODO: do something about this since TPU does not play nice with
-            # uneven batch sizes
-            drop_remainder=True,
-            #drop_remainder=False,
+            drop_remainder=self.use_tpu,
             labels=list(labels))
 
         hooks = None
@@ -584,6 +613,16 @@ class SiameseBert(object):
         tf.logging.info(f'Training finished! Time take: {tt() - start}')
 
     def _generate_query_pairs(self, input_q, ref_q):
+        """Generate query pairs given by `input_q` and `ref_q`. The query pairs
+        are generated in an order that make label prediction easy to do.
+
+        e.g. input_q = [a, b, c]; ref_q = [1, 2]
+
+        Order of pairs:
+                [(a, 1), (a, 2), (b, 1), (b, 2), (c, 1), (c, 2)]
+
+        """
+
         ordered_list_pairs = list(itertools.product(input_q, ref_q))
         # TODO: this is not very memory efficient, so we need a better way
         # to handle large numbers of pairs
@@ -591,6 +630,15 @@ class SiameseBert(object):
         return list(l_q), list(r_q)
 
     def predict_labels_tfrecord(self, df_input, df_ref, tfrecord_save_path):
+        """Predict labels from input queries (left queries in tfrecord) with
+        right queries in tfrecord as reference.
+
+        See self.predict_labels() for how prediction works.
+
+        """
+
+        # TODO: we don't actually need `df_input` and `df_ref`, just their
+        #   lengths
         num_pairs = len(df_input) * len(df_ref)
         batch_remainder = num_pairs % self.predict_batch_size
         pad_length = self.predict_batch_size - batch_remainder
@@ -611,6 +659,13 @@ class SiameseBert(object):
 
 
     def predict_labels(self, df_input, df_ref):
+        """Predicts the labels of the queries in `df_input` using queries in `df_ref`
+
+        For each query in `df_input` our "prediction" is the label of the most
+        similar query in `df_ref`.
+
+        """
+
         l_q, r_q = self._generate_query_pairs(df_input['query'], df_ref['query'])
         num_pairs = len(df_input) * len(df_ref)
 
@@ -635,6 +690,11 @@ class SiameseBert(object):
         return df_pred_labels
 
     def dev_accuracy(self, df_input, df_ref):
+        """Measures the fraction of labels in `df_input` that are correctly
+        that are correctly predicted (i.e. labels predicted using `df_ref`).
+
+        """
+
         tf.logging.info('Starting dev accuracy...')
         start = tt()
         # make the predictions
@@ -650,6 +710,11 @@ class SiameseBert(object):
                 'df_pred_labels': df_pred_labels}
 
     def dev_accuracy_tfrecord(self, df_input, df_ref, tfrecord_save_path):
+        """Computes dev accuracy in the same way as self.dev_accuracy, but uses
+        tf records to load the data (given by tfrecord_save_path).
+
+        """
+
         tf.logging.info('Starting dev accuracy...')
         start = tt()
         # make the predictions
