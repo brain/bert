@@ -1,0 +1,4 @@
+models/
+dev_accs/
+pred_results/
+*tfrecord
