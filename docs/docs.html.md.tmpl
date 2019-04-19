@@ -1,0 +1,46 @@
+
+---
+# ${DIR}
+{% for cat, items in category.items() %}
+{{cat}}
+{% for method, url in items.items() %}
+## {{method}}
+{% for uri, dd_ in url.items() %}
+{% for d_ in dd_ %}
+```python
+import requests
+```
+
+```shell
+curl
+  -X {{d_.verb}}
+  -H "Authorization: token xxxxx"{% if d_.verb in verbs %}
+  --data '
+{{d_.req}}
+  '{% endif %}
+  {{uri}}
+```
+
+> JSON Response:
+
+```json
+{{d_.res}}
+```
+
+### HTTP Request
+
+`{{d_.verb}} https://${DIR}.braininc.net{{uri}}`
+
+### Query Parameters
+
+Parameter | Default | Description
+--------- | ------- | -----------
+
+
+<aside class="success">
+success
+</aside>
+{% endfor %}
+{% endfor %}
+{% endfor %}
+{% endfor %}
