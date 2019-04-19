@@ -1,0 +1,43 @@
+# apidocs.yml is code generated
+# make docs [Makefile]
+# look at ./docs/docs.py for documentation
+
+configuration:
+  title: API
+  description: API Documentation
+  uri: http://localhost:8500
+categories:
+{% for cat in category %}
+  {{cat}}:
+    description: user preferences
+{% endfor %}
+versions:
+  v1.0:
+    methods:
+  {% for cat, items in category.items() %}
+    {% for verb, url in items.items() %}
+      {% for uri, d_ in url.items() %}
+      {{verb}}_{{cat}}:
+        category: {{cat|safe}}
+        uri: {{uri|safe}}
+        method: {{verb}}
+        description: "{{d_.description}}"
+        {% if verb == "POST" %}
+        request_body:
+          type: string
+          sample: "{{d_.req|e}}"
+        {% endif %}
+        response_body:
+          type: string
+          sample: "{{d_.res|e}}"
+      {% endfor %}
+    {% endfor %}
+  {% endfor %}
+
+    types:
+      mimeType:
+        item:
+          type: string
+          sample: application/json
+        format:
+          pretty: type/sous-type
