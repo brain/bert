@@ -1,0 +1,106 @@
+version: '2.1'
+services:
+  mysql:
+    container_name: mysql
+    image: mysql:5.7.19
+    restart: always
+    env_file:
+      - ${PWD}/docker/dev-env.rc
+    networks:
+      - default
+    healthcheck:
+      test: "mysqladmin ping -c2 -h localhost"
+      interval: 10s
+      timeout: 10s
+      retries: 30
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_bin
+      - --sql-mode=STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION
+    volumes:
+      - mysql:/var/lib/mysql
+
+  create-db:
+    depends_on:
+      mysql:
+        condition: service_healthy
+    image: mysql:5.7.19
+    env_file:
+      - ${PWD}/docker/dev-env.rc
+    volumes:
+      - ${PWD}/docker/create-db.sh:/create-db.sh
+    command: /create-db.sh
+
+  migrations:
+    depends_on:
+      - create-db
+    image: ${DOCKER_IMAGE}
+    env_file:
+      - ${PWD}/docker/dev-env.rc
+    environment:
+      - ENVIRONMENT=${ENVIRONMENT}
+    volumes:
+      - ${PWD}:/brain/src
+      - ${DOCKER_CONTAINER}-venv:/venv
+    links:
+      - mysql
+    stdin_open: true
+    tty: true
+    command: ./manage.py db upgrade
+
+  bert:
+    depends_on:
+      - migrations
+    ports:
+      - 5000:5000
+    container_name: ${DOCKER_CONTAINER}
+    image: ${DOCKER_IMAGE}
+    env_file:
+      - ${PWD}/docker/dev-env.rc
+    volumes:
+      - ${PWD}:/brain/src
+      - ${DOCKER_CONTAINER}-venv:/venv
+    stdin_open: true
+    tty: true
+    command: ./manage.py run_development_server
+
+  test:
+    container_name: ${DOCKER_CONTAINER}-test
+    depends_on:
+      - ${DOCKER_CONTAINER}
+    image: ${DOCKER_IMAGE}
+    env_file:
+      - ${PWD}/docker/dev-env.rc
+    environment:
+      - ENVIRONMENT=test
+      - RENDER_DOCS=${RENDER_DOCS}
+    volumes:
+      - ${PWD}:/brain/src
+      - ${DOCKER_CONTAINER}-venv:/venv
+    command: pytest tests
+    stdin_open: true
+    tty: true
+
+  coverage:
+    container_name: ${DOCKER_CONTAINER}-coverage
+    depends_on:
+      - bert
+    image: ${DOCKER_IMAGE}
+    env_file:
+      - ${PWD}/docker/dev-env.rc
+    environment:
+      - ENVIRONMENT=test
+    volumes:
+      - ${PWD}:/brain/src
+    command: py.test --cov=./app tests/ # NOTE: append to --cov with your own model code
+
+volumes:
+  mysql:
+    name: mysql
+  bert-venv:
+    name: ${DOCKER_CONTAINER}-venv
+
+networks:
+  default:
+    external:
+      name: ${NETWORK}
