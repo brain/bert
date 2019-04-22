@@ -1,12 +1,16 @@
 FROM python:3.6.2
 
 WORKDIR /brain/src
-
-ADD requirements.txt /brain/src
-RUN pip install -r requirements.txt
-
 ADD . /brain/src
 
-EXPOSE 80
+ENV ENVIRONMENT production
+ENV PYTHONUSERBASE /venv
+ENV PATH "/venv/bin:${PATH}"
+ENV PYTHONPATH "$PYTHONPATH:/brain/src:/brain/src/tests"
+ARG GITHUB_TOKEN
+RUN ./docker/setup.sh
 
-CMD ["python"]
+EXPOSE 5000
+
+ENTRYPOINT ["./docker/entrypoint.sh"]
+CMD ["./manage.py", "run_production_server"]
