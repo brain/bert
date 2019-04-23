@@ -1,16 +1,16 @@
 import tensorflow as tf
-import modeling
-import optimization
-import run_classifier
-import tokenization
-import featurization
+from google_bert import modeling
+from google_bert import optimization
+from google_bert import run_classifier
+from google_bert import tokenization
+from training import featurization
 import os
 import datetime
 import pickle
 import pandas as pd
 import numpy as np
 import itertools
-from ftm_processor import FtmProcessor
+from training.ftm_processor import FtmProcessor
 from time import time as tt
 from tqdm import tqdm
 from tensorflow.python import debug as tf_debug
@@ -514,7 +514,8 @@ class SiameseBert(object):
         tf.logging.info(f'Finished evaluation! Time taken: {tt() - start}')
         return eval_result
 
-    def train_with_tfrecords(self, num_train_examples):
+    def train_with_tfrecords(self, num_train_examples, bert_tfrecord_bucket,
+                             tfrecord_filenames_path):
         """Train siamese BERT model using tfrecord files indicated by
         `self.dataset_name`.
 
@@ -531,12 +532,10 @@ class SiameseBert(object):
         self.num_warmup_steps = int(self.num_train_steps * self.warmup_proportion)
 
         # TODO: consider refactoring and parameterizing
-        # TODO: you can replace task_data_dir with something from train_ftm.py script
-        task_data_dir = f'gs://mteoh_siamese_bert_data/'
-        tfrecord_filenames_path = f'./example_data/{self.dataset_name}/tfrecord_filenames.txt'
+        # TODO: you can replace bert_tfrecord_bucket with something from train_ftm.py script
         raw_filenames = [line.rstrip('\n') for line in open(tfrecord_filenames_path)]
         tfrecord_save_paths = [
-            os.path.join(task_data_dir, raw_filename)
+            os.path.join(bert_tfrecord_bucket, raw_filename)
             for raw_filename in raw_filenames]
 
         train_input_fn = input_fn_builder_tfrecords(
@@ -572,6 +571,7 @@ class SiameseBert(object):
         start = tt()
 
         # TODO: is there a better way of parameterizing this?
+        # TODO: may need to change paths
         feats_path = f'./example_data/{self.dataset_name}/train_feats_cache_{self.dataset_name}.pkl'
         tf.logging.info(f'feats_path = {feats_path}')
         if os.path.exists(feats_path):

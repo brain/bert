@@ -2,8 +2,8 @@ import tensorflow as tf
 import pickle
 import os
 import re
-import train_utils
-from siamese_bert import SiameseBert
+from training import train_utils
+from training.siamese_bert import SiameseBert
 
 flags = tf.flags
 FLAGS = flags.FLAGS
@@ -95,12 +95,13 @@ def main(_):
     BERT_MODEL = 'uncased_L-12_H-768_A-12'
     BERT_PRETRAINED_DIR = 'gs://cloud-tpu-checkpoints/bert/' + BERT_MODEL
     OUTPUT_BUCKET = 'bert_output_bucket_mteoh'
-    BERT_TFRECORD_BUCKET = 'mteoh_siamese_bert_data'
+    BERT_TFRECORD_BUCKET = 'gs://mteoh_siamese_bert_data'
     TASK = FLAGS.task
     OUTPUT_DIR = 'gs://{}/bert/models/{}'.format(OUTPUT_BUCKET, TASK)
-    TASK_DATA_DIR = f'./example_data/{FLAGS.dataset}/'
-    DEV_ACC_DIR = f'./dev_accs/{TASK}'
-    PREDS_DIR = f'./pred_results/{TASK}'
+    MAIN_DIR = os.path.dirname(__file__)
+    TASK_DATA_DIR = os.path.join(MAIN_DIR, f'example_data/{FLAGS.dataset}/')
+    DEV_ACC_DIR = os.path.join(MAIN_DIR, f'dev_accs/{TASK}')
+    PREDS_DIR = os.path.join(MAIN_DIR, f'pred_results/{TASK}')
     RANDOM_SAMPLE_SEED = 0
     SAMPLE_SIZE = 2048
 
@@ -209,7 +210,8 @@ def main(_):
 
         tf.logging.info('training on dataset...')
         if FLAGS.use_train_tfrecords:
-            sb.train_with_tfrecords(len(labels))
+            sb.train_with_tfrecords(len(labels), BERT_TFRECORD_BUCKET,
+                os.path.join(TASK_DATA_DIR, 'tfrecord_filenames.txt'))
         else:
             sb.train(l_queries, r_queries, labels)
         tf.logging.info('done training')
@@ -230,7 +232,7 @@ def main(_):
             tf.logging.info(f'****targ_epoch_num = {targ_epoch_num}: computing dev accuracy...')
 
             dev_acc_tfrecord_bucket = os.path.join(
-                f'gs://{BERT_TFRECORD_BUCKET}/',
+                BERT_TFRECORD_BUCKET,
                 f'{FLAGS.dataset}_devacc_pairs_vdn_DAr_{FLAGS.max_seq_length}.tfrecord')
             dev_acc_res = sb.dev_accuracy_tfrecord(df_vdn, df_ref, dev_acc_tfrecord_bucket)
             dev_acc_save_path = os.path.join(
@@ -242,7 +244,7 @@ def main(_):
                     tf.logging.info(f'****targ_epoch_num = {targ_epoch_num}: dev accuracy with larger DAr...')
 
                     dev_acc_tfrecord_bucket = os.path.join(
-                        f'gs://{BERT_TFRECORD_BUCKET}/',
+                        BERT_TFRECORD_BUCKET,
                         f'{FLAGS.dataset}_devacc_pairs_vdn_DAr_large_{FLAGS.max_seq_length}.tfrecord')
                     dev_acc_res = sb.dev_accuracy_tfrecord(df_vdn, df_ref_large, dev_acc_tfrecord_bucket )
                     dev_acc_save_path = os.path.join(
@@ -253,7 +255,7 @@ def main(_):
                     tf.logging.info(f'****targ_epoch_num = {targ_epoch_num}: dev acc unseen test data, DAr...')
 
                     dev_acc_tfrecord_bucket = os.path.join(
-                        f'gs://{BERT_TFRECORD_BUCKET}/',
+                        BERT_TFRECORD_BUCKET,
                         f'{FLAGS.dataset}_devacc_pairs_vdn_disjoint_DAr_{FLAGS.max_seq_length}.tfrecord')
                     dev_acc_res = sb.dev_accuracy_tfrecord(df_vdn_disj, df_ref, dev_acc_tfrecord_bucket)
                     dev_acc_save_path = os.path.join(
@@ -264,7 +266,7 @@ def main(_):
                     tf.logging.info(f'****targ_epoch_num = {targ_epoch_num}: dev acc unseen test data, larger DAr...')
 
                     dev_acc_tfrecord_bucket = os.path.join(
-                        f'gs://{BERT_TFRECORD_BUCKET}/',
+                        BERT_TFRECORD_BUCKET,
                         f'{FLAGS.dataset}_devacc_pairs_vdn_disjoint_DAr_large_{FLAGS.max_seq_length}.tfrecord')
                     dev_acc_res = sb.dev_accuracy_tfrecord(df_vdn_disj, df_ref_large, dev_acc_tfrecord_bucket)
                     dev_acc_save_path = os.path.join(

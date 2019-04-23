@@ -1,4 +1,4 @@
-models/
-dev_accs/
-pred_results/
+training/dev_accs/
+training/pred_results/
+*.git*
 *tfrecord
