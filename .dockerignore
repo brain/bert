@@ -1,3 +1,9 @@
+# repo-specific things
+**/example_data/
+**/dev_accs/
+**/pred_results/
+
+
 tmp
 **/*.log
 .git

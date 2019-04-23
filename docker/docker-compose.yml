@@ -52,7 +52,7 @@ services:
     depends_on:
       - migrations
     ports:
-      - 5000:5000
+      - 7000:7000
     container_name: ${DOCKER_CONTAINER}
     image: ${DOCKER_IMAGE}
     env_file:
