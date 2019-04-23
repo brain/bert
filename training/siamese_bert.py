@@ -1,18 +1,15 @@
 import tensorflow as tf
-import modeling
-import optimization
-import run_classifier
-import tokenization
-import featurization
+from google_bert import modeling
+from google_bert import optimization
+from google_bert import tokenization
+from training import featurization
 import os
-import datetime
 import pickle
 import pandas as pd
 import numpy as np
 import itertools
-from ftm_processor import FtmProcessor
+from training.ftm_processor import FtmProcessor
 from time import time as tt
-from tqdm import tqdm
 from tensorflow.python import debug as tf_debug
 
 
@@ -84,6 +81,7 @@ def input_fn_builder(features, seq_length, is_training, drop_remainder,
 
     return input_fn
 
+
 def input_fn_builder_tfrecords(is_training, drop_remainder, max_seq_length,
                                tfrecord_save_paths, pad_length=0):
 
@@ -102,6 +100,7 @@ def input_fn_builder_tfrecords(is_training, drop_remainder, max_seq_length,
             'r_input_mask': tf.FixedLenFeature([max_seq_length], tf.int64, default_value=None)}
         if is_training:
             feature_description['label'] = tf.FixedLenFeature([], tf.int64, default_value=None)
+
         def _parse(example_proto):
             parsed_features = tf.parse_single_example(example_proto, feature_description)
             if is_training:
@@ -186,8 +185,7 @@ class SiameseBert(object):
             tpu_config=tf.contrib.tpu.TPUConfig(
                 iterations_per_loop=iterations_per_loop,
                 num_shards=num_tpu_cores,
-                per_host_input_for_training=\
-                    tf.contrib.tpu.InputPipelineConfig.PER_HOST_V2))
+                per_host_input_for_training=tf.contrib.tpu.InputPipelineConfig.PER_HOST_V2))
 
         # make model function
         self.model_fn = self.model_fn_builder(
@@ -260,7 +258,6 @@ class SiameseBert(object):
                                               name='sim_scores')
                 label_preds = tf.math.round(sim_scores, name='label_preds')
 
-
             with tf.variable_scope('loss'):
                 logits = tf.math.add(tf.constant(1.0), -sim_scores)
                 logits = tf.math.divide(sim_scores, logits)
@@ -316,8 +313,8 @@ class SiameseBert(object):
             initialized_variable_names = {}
             scaffold_fn = None
             if init_checkpoint:
-                (assignment_map, initialized_variable_names
-                ) = modeling.get_assignment_map_from_checkpoint(tvars, init_checkpoint)
+                assignment_map, initialized_variable_names = \
+                    modeling.get_assignment_map_from_checkpoint(tvars, init_checkpoint)
                 if use_tpu:
 
                     def tpu_scaffold():
@@ -331,9 +328,10 @@ class SiameseBert(object):
 
             tf.logging.info("**** Trainable Variables ****")
             for var in tvars:
-                init_string = ""
+                # init_string = ""
                 if var.name in initialized_variable_names:
-                    init_string = ", *INIT_FROM_CKPT*"
+                    # init_string = ", *INIT_FROM_CKPT*"
+                    pass
                 pass
                 # tf.logging.info("  name = %s, shape = %s%s", var.name, var.shape,
                 #                 init_string)
@@ -435,7 +433,6 @@ class SiameseBert(object):
             # TODO: do something about this since TPU does not play nice with
             # uneven batch sizes
             drop_remainder=drop_remainder)
-            #drop_remainder=False)
         tf.logging.info(f'Pair Predictions: done preparing input_fn. time taken: {tt()-start}')
 
         # run prediction
@@ -514,7 +511,8 @@ class SiameseBert(object):
         tf.logging.info(f'Finished evaluation! Time taken: {tt() - start}')
         return eval_result
 
-    def train_with_tfrecords(self, num_train_examples):
+    def train_with_tfrecords(self, num_train_examples, bert_tfrecord_bucket,
+                             tfrecord_filenames_path):
         """Train siamese BERT model using tfrecord files indicated by
         `self.dataset_name`.
 
@@ -531,12 +529,10 @@ class SiameseBert(object):
         self.num_warmup_steps = int(self.num_train_steps * self.warmup_proportion)
 
         # TODO: consider refactoring and parameterizing
-        # TODO: you can replace task_data_dir with something from train_ftm.py script
-        task_data_dir = f'gs://mteoh_siamese_bert_data/'
-        tfrecord_filenames_path = f'./example_data/{self.dataset_name}/tfrecord_filenames.txt'
+        # TODO: you can replace bert_tfrecord_bucket with something from train_ftm.py script
         raw_filenames = [line.rstrip('\n') for line in open(tfrecord_filenames_path)]
         tfrecord_save_paths = [
-            os.path.join(task_data_dir, raw_filename)
+            os.path.join(bert_tfrecord_bucket, raw_filename)
             for raw_filename in raw_filenames]
 
         train_input_fn = input_fn_builder_tfrecords(
@@ -572,6 +568,7 @@ class SiameseBert(object):
         start = tt()
 
         # TODO: is there a better way of parameterizing this?
+        # TODO: may need to change paths
         feats_path = f'./example_data/{self.dataset_name}/train_feats_cache_{self.dataset_name}.pkl'
         tf.logging.info(f'feats_path = {feats_path}')
         if os.path.exists(feats_path):
@@ -657,7 +654,6 @@ class SiameseBert(object):
         df_pred_labels['ranked_indices'] = list(np.argsort(-sim_scores))
 
         return df_pred_labels
-
 
     def predict_labels(self, df_input, df_ref):
         """Predicts the labels of the queries in `df_input` using queries in `df_ref`

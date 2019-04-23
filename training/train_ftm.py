@@ -2,11 +2,12 @@ import tensorflow as tf
 import pickle
 import os
 import re
-import train_utils
-from siamese_bert import SiameseBert
+from training import train_utils
+from training.siamese_bert import SiameseBert
 
 flags = tf.flags
 FLAGS = flags.FLAGS
+
 
 def del_all_flags(FLAGS):
     flags_dict = FLAGS._flags()
@@ -14,99 +15,126 @@ def del_all_flags(FLAGS):
     for keys in keys_list:
         FLAGS.__delattr__(keys)
 
+
 # Flags for this script
 # Remove the flags from `run_classifier` and instead use from this file
 del_all_flags(tf.flags.FLAGS)
 
-flags.DEFINE_bool("use_tpu", False,
+flags.DEFINE_bool(
+    "use_tpu", False,
     "Whether to use TPU or GPU/CPU.")
 
-flags.DEFINE_integer("train_batch_size", 32,
+flags.DEFINE_integer(
+    "train_batch_size", 32,
     "Batch size to use for training.")
 
-flags.DEFINE_integer("predict_batch_size", 32,
+flags.DEFINE_integer(
+    "predict_batch_size", 32,
     "Batch size to use for prediction.")
 
-flags.DEFINE_integer("eval_batch_size", 8,
+flags.DEFINE_integer(
+    "eval_batch_size", 8,
     "Batch size to use for evaluation.")
 
-flags.DEFINE_bool("use_debug", False,
+flags.DEFINE_bool(
+    "use_debug", False,
     "Whether to use tf debugger.")
 
-flags.DEFINE_string("task", "temp_task",
+flags.DEFINE_string(
+    "task", "temp_task",
     "Task name & output subdir name.")
 
-flags.DEFINE_integer("which_gpu", None,
+flags.DEFINE_integer(
+    "which_gpu", None,
     "Which specific GPU to use.")
 
-flags.DEFINE_integer("num_train_epochs", 20,
+flags.DEFINE_integer(
+    "num_train_epochs", 20,
     "Number of epochs to train over.")
 
-flags.DEFINE_bool("feedforward_logging", False,
+flags.DEFINE_bool(
+    "feedforward_logging", False,
     "Whether to log metrics in feedforward computation.")
 
-flags.DEFINE_bool("optimizer_logging", False,
+flags.DEFINE_bool(
+    "optimizer_logging", False,
     "Whether to log metrics in the optimizer.")
 
-flags.DEFINE_string("dataset", None,
+flags.DEFINE_string(
+    "dataset", None,
     "Data ID to use for this experiment.")
 
-flags.DEFINE_integer("max_seq_length", 50,
+flags.DEFINE_integer(
+    "max_seq_length", 50,
     "Max token count for a query.")
 
-flags.DEFINE_integer("num_tpu_cores", 8,
+flags.DEFINE_integer(
+    "num_tpu_cores", 8,
     "Number of TPU cores to use.")
 
-flags.DEFINE_integer("repeat_factor", 128,
+flags.DEFINE_integer(
+    "repeat_factor", 128,
     "Number of times to repeat query pairs.")
 
-flags.DEFINE_string("tpu_name", "mteoh",
+flags.DEFINE_string(
+    "tpu_name", "mteoh",
     "Name of the tpu to use.")
 
-flags.DEFINE_float("learning_rate", 2e-5,
+flags.DEFINE_float(
+    "learning_rate", 2e-5,
     "The initial learning rate for Adam.")
 
-flags.DEFINE_integer("train_epoch_increment", 500,
+flags.DEFINE_integer(
+    "train_epoch_increment", 500,
     "Number of epochs to incrememnt model training.")
 
-flags.DEFINE_bool("compute_dev_accuracy", False,
+flags.DEFINE_bool(
+    "compute_dev_accuracy", False,
     "Whether or not to compute dev accuracy.")
 
-flags.DEFINE_bool("use_train_tfrecords", False,
+flags.DEFINE_bool(
+    "use_train_tfrecords", False,
     "Whether to use tfrecords file for training data.")
 
-flags.DEFINE_integer("dev_acc_epoch_period", 2,
+flags.DEFINE_integer(
+    "dev_acc_epoch_period", 2,
     "How many iterations in the epoch loop to wait before doing dev accuracy.")
 
-flags.DEFINE_bool("extended_compute_dev_acc", False,
+flags.DEFINE_bool(
+    "extended_compute_dev_acc", False,
     "Whether to use extended dev accuracy computations")
 
-flags.DEFINE_bool("do_preds", False,
+flags.DEFINE_bool(
+    "do_preds", False,
     "Whether to do preds")
 
-flags.DEFINE_bool("do_eval", False,
+flags.DEFINE_bool(
+    "do_eval", False,
     "Whether to evaluate pairwise accuracy and loss.")
 
-flags.DEFINE_bool("sum_loss", False,
+flags.DEFINE_bool(
+    "sum_loss", False,
     "Whether to sum (True) loss or average it (False).")
+
 
 def main(_):
     tf.logging.set_verbosity(tf.logging.INFO)
     BERT_MODEL = 'uncased_L-12_H-768_A-12'
     BERT_PRETRAINED_DIR = 'gs://cloud-tpu-checkpoints/bert/' + BERT_MODEL
     OUTPUT_BUCKET = 'bert_output_bucket_mteoh'
-    BERT_TFRECORD_BUCKET = 'mteoh_siamese_bert_data'
+    BERT_TFRECORD_BUCKET = 'gs://mteoh_siamese_bert_data'
     TASK = FLAGS.task
     OUTPUT_DIR = 'gs://{}/bert/models/{}'.format(OUTPUT_BUCKET, TASK)
-    TASK_DATA_DIR = f'./example_data/{FLAGS.dataset}/'
-    DEV_ACC_DIR = f'./dev_accs/{TASK}'
-    PREDS_DIR = f'./pred_results/{TASK}'
+    MAIN_DIR = os.path.dirname(__file__)
+    TASK_DATA_DIR = os.path.join(MAIN_DIR, f'example_data/{FLAGS.dataset}/')
+    DEV_ACC_DIR = os.path.join(MAIN_DIR, f'dev_accs/{TASK}')
+    PREDS_DIR = os.path.join(MAIN_DIR, f'pred_results/{TASK}')
     RANDOM_SAMPLE_SEED = 0
     SAMPLE_SIZE = 2048
 
     if FLAGS.which_gpu is not None:
         tf.logging.info(f'using GPU: {FLAGS.which_gpu}')
-        os.environ["CUDA_VISIBLE_DEVICES"]=f"{FLAGS.which_gpu}"
+        os.environ["CUDA_VISIBLE_DEVICES"] = f"{FLAGS.which_gpu}"
 
     if FLAGS.do_preds:
         os.makedirs(PREDS_DIR, exist_ok=True)
@@ -117,7 +145,8 @@ def main(_):
         os.path.join(TASK_DATA_DIR, f'{FLAGS.dataset}_train_pairs.pkl'))
     tf.logging.info('Done loading training pairs!')
 
-    l_queries_sample = l_queries.sample(n=SAMPLE_SIZE,
+    l_queries_sample = l_queries.sample(
+        n=SAMPLE_SIZE,
         random_state=RANDOM_SAMPLE_SEED)
     sample_idx = l_queries_sample.index
     r_queries_sample = r_queries.loc[sample_idx]
@@ -142,7 +171,6 @@ def main(_):
         if os.path.exists(ref_large_path):
             df_ref_large = pickle.load(open(ref_large_path, 'rb'))
             ref_large_exists = True
-
 
     if FLAGS.do_eval:
         sb = SiameseBert(
@@ -169,7 +197,8 @@ def main(_):
         tf.logging.info(f'{res}')
 
     for targ_epoch_num in range(FLAGS.train_epoch_increment,
-        FLAGS.num_train_epochs + FLAGS.train_epoch_increment, FLAGS.train_epoch_increment):
+                                FLAGS.num_train_epochs + FLAGS.train_epoch_increment,
+                                FLAGS.train_epoch_increment):
         # Train in increments of `FLAGS.train_epoch_increment`, ending at
         #   `FLAGS.num_train_epochs`
 
@@ -179,7 +208,7 @@ def main(_):
         if latest_checkpoint_path is None:
             prior_steps_completed = 0
         else:
-            step_num_idx = re.match('.*\.ckpt-', latest_checkpoint_path).end()
+            step_num_idx = re.match('.*ckpt-', latest_checkpoint_path).end()
             prior_steps_completed = int(latest_checkpoint_path[step_num_idx:])
 
         current_num_steps = int(
@@ -209,7 +238,9 @@ def main(_):
 
         tf.logging.info('training on dataset...')
         if FLAGS.use_train_tfrecords:
-            sb.train_with_tfrecords(len(labels))
+            sb.train_with_tfrecords(
+                len(labels), BERT_TFRECORD_BUCKET,
+                os.path.join(TASK_DATA_DIR, 'tfrecord_filenames.txt'))
         else:
             sb.train(l_queries, r_queries, labels)
         tf.logging.info('done training')
@@ -230,7 +261,7 @@ def main(_):
             tf.logging.info(f'****targ_epoch_num = {targ_epoch_num}: computing dev accuracy...')
 
             dev_acc_tfrecord_bucket = os.path.join(
-                f'gs://{BERT_TFRECORD_BUCKET}/',
+                BERT_TFRECORD_BUCKET,
                 f'{FLAGS.dataset}_devacc_pairs_vdn_DAr_{FLAGS.max_seq_length}.tfrecord')
             dev_acc_res = sb.dev_accuracy_tfrecord(df_vdn, df_ref, dev_acc_tfrecord_bucket)
             dev_acc_save_path = os.path.join(
@@ -242,9 +273,9 @@ def main(_):
                     tf.logging.info(f'****targ_epoch_num = {targ_epoch_num}: dev accuracy with larger DAr...')
 
                     dev_acc_tfrecord_bucket = os.path.join(
-                        f'gs://{BERT_TFRECORD_BUCKET}/',
+                        BERT_TFRECORD_BUCKET,
                         f'{FLAGS.dataset}_devacc_pairs_vdn_DAr_large_{FLAGS.max_seq_length}.tfrecord')
-                    dev_acc_res = sb.dev_accuracy_tfrecord(df_vdn, df_ref_large, dev_acc_tfrecord_bucket )
+                    dev_acc_res = sb.dev_accuracy_tfrecord(df_vdn, df_ref_large, dev_acc_tfrecord_bucket)
                     dev_acc_save_path = os.path.join(
                         DEV_ACC_DIR, f'dev_accs_epoch_{targ_epoch_num}_vdn_DAr_large.pkl')
                     pickle.dump(dev_acc_res, open(dev_acc_save_path, 'wb'), -1)
@@ -253,7 +284,7 @@ def main(_):
                     tf.logging.info(f'****targ_epoch_num = {targ_epoch_num}: dev acc unseen test data, DAr...')
 
                     dev_acc_tfrecord_bucket = os.path.join(
-                        f'gs://{BERT_TFRECORD_BUCKET}/',
+                        BERT_TFRECORD_BUCKET,
                         f'{FLAGS.dataset}_devacc_pairs_vdn_disjoint_DAr_{FLAGS.max_seq_length}.tfrecord')
                     dev_acc_res = sb.dev_accuracy_tfrecord(df_vdn_disj, df_ref, dev_acc_tfrecord_bucket)
                     dev_acc_save_path = os.path.join(
@@ -264,12 +295,13 @@ def main(_):
                     tf.logging.info(f'****targ_epoch_num = {targ_epoch_num}: dev acc unseen test data, larger DAr...')
 
                     dev_acc_tfrecord_bucket = os.path.join(
-                        f'gs://{BERT_TFRECORD_BUCKET}/',
+                        BERT_TFRECORD_BUCKET,
                         f'{FLAGS.dataset}_devacc_pairs_vdn_disjoint_DAr_large_{FLAGS.max_seq_length}.tfrecord')
                     dev_acc_res = sb.dev_accuracy_tfrecord(df_vdn_disj, df_ref_large, dev_acc_tfrecord_bucket)
                     dev_acc_save_path = os.path.join(
                         DEV_ACC_DIR, f'dev_accs_epoch_{targ_epoch_num}_vdn_disjoint_DAr_large.pkl')
                     pickle.dump(dev_acc_res, open(dev_acc_save_path, 'wb'), -1)
 
-if __name__ == "__main__" :
+
+if __name__ == "__main__":
     tf.app.run()

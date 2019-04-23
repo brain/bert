@@ -1,19 +1,16 @@
 import tensorflow as tf
 import pickle
 import os
-import tokenization
-import featurization
-import siamese_bert
+from google_bert import tokenization
+from training import featurization
+from training.ftm_processor import FtmProcessor
 import numpy as np
-import pandas as pd
 from time import time as tt
 from multiprocessing.pool import ThreadPool
-from tqdm import tqdm
-from siamese_bert import SiameseBert
-from ftm_processor import FtmProcessor
 
 flags = tf.flags
 FLAGS = flags.FLAGS
+
 
 def del_all_flags(FLAGS):
     flags_dict = FLAGS._flags()
@@ -21,20 +18,25 @@ def del_all_flags(FLAGS):
     for keys in keys_list:
         FLAGS.__delattr__(keys)
 
+
 # Remove the flags from `run_classifier` since we're not using them in this
 # file
 del_all_flags(tf.flags.FLAGS)
 
-flags.DEFINE_string("dataset", None,
+flags.DEFINE_string(
+    "dataset", None,
     "Data ID to use for this experiment.")
 
-flags.DEFINE_integer("max_seq_length", 50,
+flags.DEFINE_integer(
+    "max_seq_length", 50,
     "Max token count for a query.")
 
-flags.DEFINE_integer("queries_per_file", 10000,
+flags.DEFINE_integer(
+    "queries_per_file", 10000,
     "Number of queries to batch the tfrecord files in. None means no batching.")
 
-flags.DEFINE_integer("num_cores", 32,
+flags.DEFINE_integer(
+    "num_cores", 32,
     "Number of cores to process the tfrecord files.")
 
 
@@ -45,8 +47,6 @@ def input_feature_pair_generator(l_queries, r_queries, labels, max_seq_length,
 
     # tokenizer
     vocab_file = os.path.join(bert_pretrained_dir, 'vocab.txt')
-    config_file = os.path.join(bert_pretrained_dir, 'bert_config.json')
-    init_checkpoint = os.path.join(bert_pretrained_dir, 'bert_model.ckpt')
     do_lower_case = bert_model_type.startswith('uncased')
 
     tokenizer = tokenization.FullTokenizer(
@@ -63,8 +63,10 @@ def input_feature_pair_generator(l_queries, r_queries, labels, max_seq_length,
 
         yield inp_fe, label
 
+
 def convert_to_tfrecords_helper(args):
     return convert_to_tfrecords(*args)
+
 
 def convert_to_tfrecords(df_train_pairs, proc_number, max_seq_length, bert_pretrained_dir,
                          bert_model_type, queries_per_file, dataset,
@@ -121,9 +123,11 @@ def convert_to_tfrecords(df_train_pairs, proc_number, max_seq_length, bert_pretr
     tf.logging.info(f'Proc_number: {proc_number}, done! Time taken: {tt() - start}')
     return filenames
 
+
 def main(_):
     tf.logging.set_verbosity(tf.logging.INFO)
-    TASK_DATA_DIR = f'./example_data/{FLAGS.dataset}/'
+    MAIN_DIR = os.path.dirname(__file__)
+    TASK_DATA_DIR = os.path.join(MAIN_DIR, f'example_data/{FLAGS.dataset}/')
     BERT_MODEL = 'uncased_L-12_H-768_A-12'
     BERT_PRETRAINED_DIR = 'gs://cloud-tpu-checkpoints/bert/' + BERT_MODEL
     TRAIN_TFRECORD_DIR = os.path.join(TASK_DATA_DIR, 'train_tfrecords')
@@ -151,7 +155,8 @@ def main(_):
 
     with open(TFRECORD_FILENAMES_PATH, 'w') as f:
         for f_name in filenames:
-           f.write(f_name + '\n')
+            f.write(f_name + '\n')
 
-if __name__ == "__main__" :
+
+if __name__ == "__main__":
     tf.app.run()

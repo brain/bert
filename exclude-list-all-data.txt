@@ -1,0 +1,5 @@
+training/dev_accs/
+training/pred_results/
+*.git*
+*tfrecord
+training/example_data/

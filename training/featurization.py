@@ -52,6 +52,7 @@ def convert_single_example(ex_index, example, max_seq_length, tokenizer):
         r_input_mask=input_mask_b)
     return feature
 
+
 class InputFeaturesPair(object):
     """Single pair of features"""
     def __init__(self,
@@ -63,4 +64,3 @@ class InputFeaturesPair(object):
         self.r_input_ids = r_input_ids
         self.l_input_mask = l_input_mask
         self.r_input_mask = r_input_mask
-

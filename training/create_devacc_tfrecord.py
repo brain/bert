@@ -1,22 +1,22 @@
 import tensorflow as tf
 import pickle
 import os
-import tokenization
-import featurization
-import siamese_bert
+from google_bert import tokenization
+from training import featurization
 import itertools
 from tqdm import tqdm
-from siamese_bert import SiameseBert
-from ftm_processor import FtmProcessor
+from training.ftm_processor import FtmProcessor
 
 flags = tf.flags
 FLAGS = flags.FLAGS
+
 
 def del_all_flags(FLAGS):
     flags_dict = FLAGS._flags()
     keys_list = [keys for keys in flags_dict]
     for keys in keys_list:
         FLAGS.__delattr__(keys)
+
 
 # Remove the flags from `run_classifier` since we're not using them in this
 # file
@@ -27,6 +27,7 @@ flags.DEFINE_integer("max_seq_length", 50, "Max token count for a query.")
 flags.DEFINE_string("vdn_string", None, "String for val data.")
 flags.DEFINE_string("DAr_string", None, "String for DAr data.")
 
+
 def input_feature_pair_generator(vdn_queries, dar_queries,
                                  bert_pretrained_dir, bert_model_type):
     """Yields single InputFeaturesPair instances"""
@@ -34,8 +35,6 @@ def input_feature_pair_generator(vdn_queries, dar_queries,
 
     # tokenizer
     vocab_file = os.path.join(bert_pretrained_dir, 'vocab.txt')
-    config_file = os.path.join(bert_pretrained_dir, 'bert_config.json')
-    init_checkpoint = os.path.join(bert_pretrained_dir, 'bert_model.ckpt')
     do_lower_case = bert_model_type.startswith('uncased')
 
     tokenizer = tokenization.FullTokenizer(
@@ -55,7 +54,8 @@ def input_feature_pair_generator(vdn_queries, dar_queries,
 
 def main(_):
     tf.logging.set_verbosity(tf.logging.INFO)
-    TASK_DATA_DIR = f'./example_data/{FLAGS.dataset}/'
+    MAIN_DIR = os.path.dirname(__file__)
+    TASK_DATA_DIR = os.path.join(MAIN_DIR, f'example_data/{FLAGS.dataset}/')
     TFRECORD_OUTPUT_DIR = os.path.join(TASK_DATA_DIR, 'devacc_tfrecords')
     os.makedirs(TFRECORD_OUTPUT_DIR, exist_ok=True)
     BERT_MODEL = 'uncased_L-12_H-768_A-12'
@@ -79,8 +79,7 @@ def main(_):
         inp_fe_generator = input_feature_pair_generator(
             list(vdn_queries), list(dar_queries), BERT_PRETRAINED_DIR,
             BERT_MODEL)
-        with tf.io.TFRecordWriter(
-            tfrecord_save_path) as writer:
+        with tf.io.TFRecordWriter(tfrecord_save_path) as writer:
 
             for inp_feat_pair in tqdm(inp_fe_generator, total=len(vdn_queries) * len(dar_queries)):
                 features = tf.train.Features(
@@ -96,5 +95,6 @@ def main(_):
                 example = tf.train.Example(features=features)
                 writer.write(example.SerializeToString())
 
-if __name__ == "__main__" :
+
+if __name__ == "__main__":
     tf.app.run()

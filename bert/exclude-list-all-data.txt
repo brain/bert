@@ -1,4 +1,0 @@
-models/
-dev_accs/
-pred_results/
-example_data/

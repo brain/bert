@@ -1,5 +1,6 @@
 import pickle
 
+
 def load_pair_data(df_path, l_col_name='query', r_col_name='query_name',
                    y_col_name='y_class'):
     """Loads pair data for ftm training

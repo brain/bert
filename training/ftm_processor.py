@@ -1,6 +1,8 @@
-import run_classifier
-import tokenization
+from google_bert import run_classifier
+from google_bert import tokenization
 from tqdm import tqdm
+import pickle
+
 
 class FtmProcessor(run_classifier.DataProcessor):
     def get_labels(self):
@@ -11,7 +13,6 @@ class FtmProcessor(run_classifier.DataProcessor):
         pairs_df = pickle.load(open(pair_cache_path, 'rb'))
         l_query_list = pairs_df['query'].values
         r_query_list = pairs_df['query_compare'].values
-        labels = pairs_df['y_class'].values
         return self._create_examples(
             l_query_list, r_query_list)
 
@@ -23,7 +24,7 @@ class FtmProcessor(run_classifier.DataProcessor):
         for i, query_pair_info in tqdm(enumerate(zip(l_query_list,
                                                      r_query_list))):
             l_query, r_query = query_pair_info
-            guid = '%s' %(i)
+            guid = '%s' % (i)
             text_a = tokenization.convert_to_unicode(l_query)
             text_b = tokenization.convert_to_unicode(r_query)
             examples.append(
