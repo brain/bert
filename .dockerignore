@@ -43,6 +43,3 @@ coverage.xml
 
 # nature-core
 nature-core/
-
-# Makefile
-.env
