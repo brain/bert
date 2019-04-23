@@ -16,7 +16,7 @@ manager.add_command('db', MigrateCommand)
 
 @manager.command
 def run_development_server():
-    app.run(debug=True, port=int(os.getenv('PORT', 5000)), host='0.0.0.0')
+    app.run(debug=True, port=int(os.getenv('PORT', 7000)), host='0.0.0.0')
 
 
 @manager.command
