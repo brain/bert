@@ -1,16 +1,14 @@
 import tensorflow as tf
 import pickle
 import os
-import tokenization
-import featurization
-import siamese_bert
+from google_bert import tokenization
+from training import featurization
+from training.ftm_processor import FtmProcessor
 import numpy as np
 import pandas as pd
 from time import time as tt
 from multiprocessing.pool import ThreadPool
 from tqdm import tqdm
-from siamese_bert import SiameseBert
-from ftm_processor import FtmProcessor
 
 flags = tf.flags
 FLAGS = flags.FLAGS
@@ -123,7 +121,8 @@ def convert_to_tfrecords(df_train_pairs, proc_number, max_seq_length, bert_pretr
 
 def main(_):
     tf.logging.set_verbosity(tf.logging.INFO)
-    TASK_DATA_DIR = f'./example_data/{FLAGS.dataset}/'
+    MAIN_DIR = os.path.dirname(__file__)
+    TASK_DATA_DIR = os.path.join(MAIN_DIR, f'example_data/{FLAGS.dataset}/')
     BERT_MODEL = 'uncased_L-12_H-768_A-12'
     BERT_PRETRAINED_DIR = 'gs://cloud-tpu-checkpoints/bert/' + BERT_MODEL
     TRAIN_TFRECORD_DIR = os.path.join(TASK_DATA_DIR, 'train_tfrecords')

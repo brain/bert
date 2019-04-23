@@ -1,5 +1,5 @@
-import run_classifier
-import tokenization
+from google_bert import run_classifier
+from google_bert import tokenization
 from tqdm import tqdm
 
 class FtmProcessor(run_classifier.DataProcessor):
