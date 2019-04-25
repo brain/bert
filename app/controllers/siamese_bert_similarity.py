@@ -6,6 +6,7 @@ from training.siamese_bert import SiameseBert
 from operator import itemgetter
 import time
 
+
 class SiameseBertSimilarityPlaceholder(Resource):
     def post(self):
         return dict(message='siamese bert similarity endpoint reached'), 200
@@ -72,7 +73,8 @@ class SiameseBertSimilarity(Resource):
             docs, drop_remainder=False)
         sim_scores = df_result.sim_scores.tolist()
         indices = df_result.index.values.tolist()
-        results = [{'text': text, 'index': idx, 'score': score}
+        results = [
+            {'text': text, 'index': idx, 'score': score}
             for (text, idx, score) in zip(docs, indices, sim_scores)]
         print(f'done prediction: results: {results}')
         print(f'time taken: {time.time() - start}')
