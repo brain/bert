@@ -1,5 +1,8 @@
-tensorflow >= 1.11.0   # CPU Version of TensorFlow.
+# tensorflow >= 1.11.0   # CPU Version of TensorFlow.
+tensorflow==1.12.0   # CPU Version of TensorFlow.
 # tensorflow-gpu  >= 1.11.0  # GPU version of TensorFlow.
 ipdb
-pandas
-tqdm
+pandas==0.24.2
+# pandas
+tqdm==4.27.0
+# tqdm
