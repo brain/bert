@@ -1,3 +1,6 @@
+# Repo-specific stuff
+models/
+
 tmp
 **/*.log
 .git
