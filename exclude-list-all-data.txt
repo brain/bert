@@ -3,3 +3,4 @@ training/pred_results/
 *.git*
 *tfrecord
 training/example_data/
+models/
