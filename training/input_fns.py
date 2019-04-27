@@ -2,7 +2,7 @@ import tensorflow as tf
 
 
 def input_fn_builder(features, seq_length, is_training, drop_remainder,
-                     labels=None):
+                     labels=None, provided_batch_size=None):
     """Creates an `input_fn` closure to be passed to TPUEstimator."""
     assert labels is None or len(features) == len(labels), '''`features` and `labels` should be the same length'''
 
@@ -19,7 +19,8 @@ def input_fn_builder(features, seq_length, is_training, drop_remainder,
 
     def input_fn(params):
         """The actual input function."""
-        batch_size = params["batch_size"]
+        # batch_size = params["batch_size"]
+        batch_size = params.get('batch_size', provided_batch_size)
 
         num_examples = len(features)
 
