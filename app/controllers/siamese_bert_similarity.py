@@ -7,7 +7,9 @@ import time
 import os
 import tensorflow as tf
 import pandas as pd
-from training.siamese_modeling import create_model
+from training.siamese_modeling import (
+    create_model, inference_model_fn_builder
+)
 from training.ftm_processor import FtmProcessor
 from training.input_fns import input_fn_builder
 from training import featurization
@@ -36,7 +38,8 @@ class SiameseBertSimilarity(Resource):
 
     def __init__(self):
         super()
-
+        print('----- INIT ------')
+        print('----- Initializing Model ------')
         # general BERT model related things
         vocab_file = os.path.join(BERT_PRETRAINED_DIR, 'vocab.txt')
         config_file = os.path.join(BERT_PRETRAINED_DIR, 'bert_config.json')
@@ -55,12 +58,14 @@ class SiameseBertSimilarity(Resource):
 
         # estimator setup
         run_config = tf.estimator.RunConfig()
-        model_fn = self._model_fn_builder(
+        model_fn = inference_model_fn_builder(
             bert_config=modeling.BertConfig.from_json_file(config_file),
-            init_checkpoint=checkpoint_path)
+            init_checkpoint=checkpoint_path,
+            random_projection_output_dim=RANDOM_PROJECTION_OUTPUT_DIM)
         self.estimator = tf.estimator.Estimator(
             model_fn=model_fn,
             config=run_config)
+        print('----- Finished initializing model------')
 
         # set up parser
         self.post_parser = reqparse.RequestParser()
@@ -82,6 +87,8 @@ class SiameseBertSimilarity(Resource):
         doc2 = args['doc2']
         print(doc1, doc2)
         sort_opt = args.get('sort', True)
+
+        print('----- POST request: Starting similarities... ------')
 
         if len(doc1) == 1:
             doc1 = doc1[0]
@@ -127,39 +134,3 @@ class SiameseBertSimilarity(Resource):
         pred_results = pd.DataFrame.from_records(pred_results)
 
         return pred_results
-
-    # TODO: is there a way we can have just one model fn for both training and
-    # this API?
-    def _model_fn_builder(self, bert_config, init_checkpoint):
-
-        def model_fn(features, labels, mode, params):
-
-            l_input_ids = features["l_input_ids"]
-            r_input_ids = features["r_input_ids"]
-            l_input_mask = features["l_input_mask"]
-            r_input_mask = features["r_input_mask"]
-
-            (total_loss, per_example_loss, logits, sim_scores, label_preds,
-                merged_summaries) = create_model(
-                bert_config, False, l_input_ids, r_input_ids,
-                l_input_mask, r_input_mask, labels, True,
-                RANDOM_PROJECTION_OUTPUT_DIM, False, False)
-
-            # initialize variables
-            print(f'---- initializing from: {init_checkpoint}')
-            tvars = tf.trainable_variables()
-            initialized_variable_names = {}
-            assignment_map, initialized_variable_names = \
-                modeling.get_assignment_map_from_checkpoint(tvars, init_checkpoint)
-            with tf.name_scope('assignments'):
-                tf.train.init_from_checkpoint(init_checkpoint, assignment_map)
-
-            # output specfication
-            output_spec = tf.estimator.EstimatorSpec(
-                mode=mode,
-                predictions={"sim_scores": sim_scores,
-                             "label_preds": label_preds})
-
-            return output_spec
-
-        return model_fn

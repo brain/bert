@@ -72,3 +72,41 @@ def create_model(bert_config, is_training, l_input_ids, r_input_ids,
 
         return (loss, per_example_loss, logits, sim_scores, label_preds,
                 merged_summaries)
+
+
+# TODO: find a better place to put this
+# TODO: is there a way we can have just one model fn for both training and
+# this API?
+def inference_model_fn_builder(bert_config, init_checkpoint,
+                               random_projection_output_dim):
+    def model_fn(features, labels, mode, params):
+
+        l_input_ids = features["l_input_ids"]
+        r_input_ids = features["r_input_ids"]
+        l_input_mask = features["l_input_mask"]
+        r_input_mask = features["r_input_mask"]
+
+        (total_loss, per_example_loss, logits, sim_scores, label_preds,
+            merged_summaries) = create_model(
+            bert_config, False, l_input_ids, r_input_ids,
+            l_input_mask, r_input_mask, labels, True,
+            random_projection_output_dim, False, False)
+
+        # initialize variables
+        print(f'---- initializing from: {init_checkpoint}')
+        tvars = tf.trainable_variables()
+        initialized_variable_names = {}
+        assignment_map, initialized_variable_names = \
+            modeling.get_assignment_map_from_checkpoint(tvars, init_checkpoint)
+        with tf.name_scope('assignments'):
+            tf.train.init_from_checkpoint(init_checkpoint, assignment_map)
+
+        # output specfication
+        output_spec = tf.estimator.EstimatorSpec(
+            mode=mode,
+            predictions={"sim_scores": sim_scores,
+                         "label_preds": label_preds})
+
+        return output_spec
+
+    return model_fn
