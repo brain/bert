@@ -5,17 +5,11 @@ from flask_restful import (
 from operator import itemgetter
 import time
 import os
-import tensorflow as tf
 import pandas as pd
 from tensorflow.contrib import predictor
 from pathlib import Path
-from training.siamese_modeling import (
-    create_model, inference_model_fn_builder
-)
 from training.ftm_processor import FtmProcessor
-from training.input_fns import input_fn_builder
 from training import featurization
-from google_bert import modeling
 from google_bert import tokenization
 
 
@@ -67,7 +61,6 @@ class SiameseBertSimilarity(Resource):
     post_parser.add_argument("sort", required=False)
 
     print('----- API ready to serve!  ------')
-
 
     def post(self):
         '''Calculates similarities between all combination of parameters

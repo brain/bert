@@ -15,7 +15,7 @@ flags.DEFINE_string(
 BERT_MODEL = 'uncased_L-12_H-768_A-12'
 BERT_PRETRAINED_DIR = 'gs://cloud-tpu-checkpoints/bert/' + BERT_MODEL
 TRAINED_MODEL_BUCKET = 'bert_output_bucket_mteoh'
-TASK = FLAGS.model_trial_name #'FTM_BERT_DATA_009_tpu_trial_1'
+TASK = FLAGS.model_trial_name  # 'FTM_BERT_DATA_009_tpu_trial_1'
 TRAINED_MODEL_DIR = 'gs://{}/bert/models/{}'.format(TRAINED_MODEL_BUCKET, TASK)
 PREDICT_BATCH_SIZE = 256
 RANDOM_PROJECTION_OUTPUT_DIM = 128
@@ -23,10 +23,9 @@ MAX_SEQ_LENGTH = 30
 USE_TPU = False
 SAVE_CHECKPOINT_STEPS = 1000
 
+
 def main(_):
-    vocab_file = os.path.join(BERT_PRETRAINED_DIR, 'vocab.txt')
     config_file = os.path.join(BERT_PRETRAINED_DIR, 'bert_config.json')
-    do_lower_case = BERT_MODEL.startswith('uncased')
 
     checkpoint_path = tf.train.latest_checkpoint(TRAINED_MODEL_DIR)
 

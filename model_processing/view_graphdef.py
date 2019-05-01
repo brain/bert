@@ -17,5 +17,6 @@ def main(_):
     print('--- Getting Size... ---')
     utils.get_size(FLAGS.saved_model_dir)
 
+
 if __name__ == "__main__":
     tf.app.run()
