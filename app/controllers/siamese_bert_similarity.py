@@ -11,15 +11,10 @@ from pathlib import Path
 from training.ftm_processor import FtmProcessor
 from training import featurization
 from google_bert import tokenization
+import model_configs
 
 
-BERT_MODEL = 'uncased_L-12_H-768_A-12'
-BERT_PRETRAINED_DIR = 'gs://cloud-tpu-checkpoints/bert/' + BERT_MODEL
-MAX_SEQ_LENGTH = 30
-
-# SAVE_MODEL_BASE_DIR = 'models/FTM_BERT_DATA_009_tpu_trial_1'
-SAVE_MODEL_BASE_DIR = 'models/FTM_BERT_DATA_008_tpu_trial_2'
-
+SAVE_MODEL_BASE_DIR = 'models/' + model_configs.TRAINED_MODEL_ID
 
 class SiameseBertSimilarityPlaceholder(Resource):
     def post(self):
@@ -36,9 +31,9 @@ class SiameseBertSimilarity(Resource):
     predict_fn = predictor.from_saved_model(model_save_dir)
 
     # general BERT model related things
-    vocab_file = os.path.join(BERT_PRETRAINED_DIR, 'vocab.txt')
-    config_file = os.path.join(BERT_PRETRAINED_DIR, 'bert_config.json')
-    do_lower_case = BERT_MODEL.startswith('uncased')
+    vocab_file = os.path.join(model_configs.BERT_PRETRAINED_DIR, 'vocab.txt')
+    config_file = os.path.join(model_configs.BERT_PRETRAINED_DIR, 'bert_config.json')
+    do_lower_case = model_configs.BERT_MODEL_TYPE.startswith('uncased')
 
     # featurization related tools
     processor = FtmProcessor()
@@ -107,7 +102,7 @@ class SiameseBertSimilarity(Resource):
     def _predict_pairs(self, l_queries, r_queries):
         pred_features = featurization.convert_examples_to_features(
             self.processor._create_examples(l_queries, r_queries),
-            MAX_SEQ_LENGTH, self.tokenizer)
+            model_configs.MAX_SEQ_LENGTH, self.tokenizer)
 
         print('--- Prediction: Starting... ---')
         pred_results = self.predict_fn({
