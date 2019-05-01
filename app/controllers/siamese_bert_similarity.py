@@ -7,6 +7,8 @@ import time
 import os
 import tensorflow as tf
 import pandas as pd
+from tensorflow.contrib import predictor
+from pathlib import Path
 from training.siamese_modeling import (
     create_model, inference_model_fn_builder
 )
@@ -28,6 +30,9 @@ MAX_SEQ_LENGTH = 30
 USE_TPU = False
 SAVE_CHECKPOINT_STEPS = 1000
 
+# SAVE_MODEL_BASE_DIR = 'models/FTM_BERT_DATA_009_tpu_trial_1'
+SAVE_MODEL_BASE_DIR = 'models/FTM_BERT_DATA_008_tpu_trial_2'
+
 
 class SiameseBertSimilarityPlaceholder(Resource):
     def post(self):
@@ -36,42 +41,33 @@ class SiameseBertSimilarityPlaceholder(Resource):
 
 class SiameseBertSimilarity(Resource):
 
-    def __init__(self):
-        super()
-        print('----- INIT ------')
-        print('----- Initializing Model ------')
-        # general BERT model related things
-        vocab_file = os.path.join(BERT_PRETRAINED_DIR, 'vocab.txt')
-        config_file = os.path.join(BERT_PRETRAINED_DIR, 'bert_config.json')
-        do_lower_case = BERT_MODEL.startswith('uncased')
+    model_save_dirs = [_dir for _dir in Path(SAVE_MODEL_BASE_DIR).iterdir()
+                       if _dir.is_dir() and 'temp' not in str(_dir)]
+    model_save_dir = str(sorted(model_save_dirs)[-1])
+    print(f'--- Loading the model saved at: {model_save_dir}')
 
-        # checkpoint to initialize from
-        checkpoint_path = tf.train.latest_checkpoint(TRAINED_MODEL_DIR)
-        # checkpoint_path = os.path.join(BERT_PRETRAINED_DIR, 'bert_model.ckpt')
+    predict_fn = predictor.from_saved_model(model_save_dir)
 
-        # featurization related tools
-        self.processor = FtmProcessor()
-        self.label_list = self.processor.get_labels()
-        self.tokenizer = tokenization.FullTokenizer(
-            vocab_file=vocab_file,
-            do_lower_case=do_lower_case)
+    # general BERT model related things
+    vocab_file = os.path.join(BERT_PRETRAINED_DIR, 'vocab.txt')
+    config_file = os.path.join(BERT_PRETRAINED_DIR, 'bert_config.json')
+    do_lower_case = BERT_MODEL.startswith('uncased')
 
-        # estimator setup
-        run_config = tf.estimator.RunConfig()
-        model_fn = inference_model_fn_builder(
-            bert_config=modeling.BertConfig.from_json_file(config_file),
-            init_checkpoint=checkpoint_path,
-            random_projection_output_dim=RANDOM_PROJECTION_OUTPUT_DIM)
-        self.estimator = tf.estimator.Estimator(
-            model_fn=model_fn,
-            config=run_config)
-        print('----- Finished initializing model------')
+    # featurization related tools
+    processor = FtmProcessor()
+    label_list = processor.get_labels()
+    tokenizer = tokenization.FullTokenizer(
+        vocab_file=vocab_file,
+        do_lower_case=do_lower_case)
 
-        # set up parser
-        self.post_parser = reqparse.RequestParser()
-        self.post_parser.add_argument("doc1", action='append', required=True)
-        self.post_parser.add_argument("doc2", action='append', required=True)
-        self.post_parser.add_argument("sort", required=False)
+    # set up parser
+    post_parser = reqparse.RequestParser()
+    post_parser.add_argument("doc1", action='append', required=True)
+    post_parser.add_argument("doc2", action='append', required=True)
+    post_parser.add_argument("sort", required=False)
+
+    print('----- API ready to serve!  ------')
+
 
     def post(self):
         '''Calculates similarities between all combination of parameters
@@ -95,12 +91,13 @@ class SiameseBertSimilarity(Resource):
 
         results = []
         if isinstance(doc1, str):
-            print(f'doc1: {doc1}; doc2: {doc2}')
             results = self._get_similarities(doc1, doc2, sort=sort_opt)
         else:
             for doc in doc1:
                 result = self._get_similarities(doc, doc2, sort=sort_opt)
                 results.append({"text": doc, "results": result})
+
+        print('----- POST request: done similarities!  ------')
         return results, 200
 
     def _get_similarities(self, doc, docs, sort=True):
@@ -114,6 +111,7 @@ class SiameseBertSimilarity(Resource):
         results = [
             {'text': text, 'index': idx, 'score': score}
             for (text, idx, score) in zip(docs, indices, sim_scores)]
+
         print(f'done prediction: results: {results}')
         print(f'time taken: {time.time() - start}')
         if sort:
@@ -124,13 +122,16 @@ class SiameseBertSimilarity(Resource):
         pred_features = featurization.convert_examples_to_features(
             self.processor._create_examples(l_queries, r_queries),
             MAX_SEQ_LENGTH, self.tokenizer)
-        input_fn = input_fn_builder(
-            features=pred_features,
-            seq_length=MAX_SEQ_LENGTH,
-            is_training=False,
-            drop_remainder=False,
-            provided_batch_size=PREDICT_BATCH_SIZE)
-        pred_results = list(self.estimator.predict(input_fn=input_fn))
+
+        print('--- Prediction: Starting... ---')
+        pred_results = self.predict_fn({
+            'l_input_ids': list(map(lambda f: f.l_input_ids, pred_features)),
+            'r_input_ids': list(map(lambda f: f.r_input_ids, pred_features)),
+            'l_input_mask': list(map(lambda f: f.l_input_mask, pred_features)),
+            'r_input_mask': list(map(lambda f: f.r_input_mask, pred_features))})
+        print('--- Prediction: Done! ---')
+        print(pred_results)
+
         pred_results = pd.DataFrame.from_records(pred_results)
 
         return pred_results
