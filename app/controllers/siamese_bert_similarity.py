@@ -15,14 +15,7 @@ from google_bert import tokenization
 
 BERT_MODEL = 'uncased_L-12_H-768_A-12'
 BERT_PRETRAINED_DIR = 'gs://cloud-tpu-checkpoints/bert/' + BERT_MODEL
-TRAINED_MODEL_BUCKET = 'bert_output_bucket_mteoh'
-TASK = 'FTM_BERT_DATA_009_tpu_trial_1'
-TRAINED_MODEL_DIR = 'gs://{}/bert/models/{}'.format(TRAINED_MODEL_BUCKET, TASK)
-PREDICT_BATCH_SIZE = 256
-RANDOM_PROJECTION_OUTPUT_DIM = 128
 MAX_SEQ_LENGTH = 30
-USE_TPU = False
-SAVE_CHECKPOINT_STEPS = 1000
 
 # SAVE_MODEL_BASE_DIR = 'models/FTM_BERT_DATA_009_tpu_trial_1'
 SAVE_MODEL_BASE_DIR = 'models/FTM_BERT_DATA_008_tpu_trial_2'
