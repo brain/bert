@@ -16,7 +16,9 @@ manager.add_command('db', MigrateCommand)
 
 @manager.command
 def run_development_server():
-    app.run(debug=True, port=int(os.getenv('PORT', 7000)), host='0.0.0.0')
+    # TODO: change back debug=True when you're done
+    # Changed this to False since it was loading BERT twice and getting OOM
+    app.run(debug=False, port=int(os.getenv('PORT', 7000)), host='0.0.0.0')
 
 
 @manager.command

@@ -6,6 +6,7 @@ from operator import itemgetter
 import time
 import os
 import pandas as pd
+import numpy as np
 from tensorflow.contrib import predictor
 from pathlib import Path
 from training.ftm_processor import FtmProcessor
@@ -29,6 +30,14 @@ class SiameseBertSimilarity(Resource):
     print(f'--- Loading the model saved at: {model_save_dir}')
 
     predict_fn = predictor.from_saved_model(model_save_dir)
+    print('--- computing dummy input... ---')
+    # run in dummy input since model has some overhead on the first prediction
+    dummy_val = predict_fn({
+        'l_input_ids': [[0] * model_configs.MAX_SEQ_LENGTH],
+        'r_input_ids': [[0] * model_configs.MAX_SEQ_LENGTH],
+        'l_input_mask': [[0] * model_configs.MAX_SEQ_LENGTH],
+        'r_input_mask': [[0] * model_configs.MAX_SEQ_LENGTH]})
+    print('--- done computing dummy input... ---')
 
     # general BERT model related things
     vocab_file = os.path.join(model_configs.BERT_PRETRAINED_DIR, 'vocab.txt')
@@ -84,15 +93,22 @@ class SiameseBertSimilarity(Resource):
     def _get_similarities(self, doc, docs, sort=True):
         print(f'doc: {doc}; docs: {docs}')
         start = time.time()
-        num_comparisons = len(docs)
-        df_result = self._predict_pairs(
-            [doc] * num_comparisons, docs)
-        sim_scores = df_result.sim_scores.tolist()
-        indices = df_result.index.values.tolist()
-        results = [
-            {'text': text, 'index': idx, 'score': score}
-            for (text, idx, score) in zip(docs, indices, sim_scores)]
+        results = []
+        num_batches = len(docs) // model_configs.PREDICT_BATCH_SIZE + 1
+        print(f'len(docs) = {len(docs)}')
+        print(f'num_batches = {num_batches}')
+        batches = np.array_split(docs, num_batches)
+        for doc_batch in batches:
+            num_comparisons = len(doc_batch)
+            df_result = self._predict_pairs(
+                [doc] * num_comparisons, doc_batch)
+            sim_scores = df_result.sim_scores.tolist()
+            indices = df_result.index.values.tolist()
+            results += [
+                {'text': text, 'index': idx, 'score': score}
+                for (text, idx, score) in zip(docs, indices, sim_scores)]
 
+        print(f'len(results) = {len(results)}')
         print(f'done prediction: results: {results}')
         print(f'time taken: {time.time() - start}')
         if sort:

@@ -5,3 +5,6 @@ BERT_PRETRAINED_DIR = 'gs://cloud-tpu-checkpoints/bert/' + BERT_MODEL_TYPE
 # About the trained Siamese BERT model
 MAX_SEQ_LENGTH = 30
 TRAINED_MODEL_ID = 'FTM_BERT_DATA_008_tpu_trial_2'
+
+# About the predictions
+PREDICT_BATCH_SIZE = 2048
