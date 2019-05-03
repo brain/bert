@@ -2,6 +2,7 @@ import tensorflow as tf
 import pickle
 import os
 import re
+import random
 from training import train_utils
 from training.siamese_bert import SiameseBert
 
@@ -86,7 +87,7 @@ flags.DEFINE_float(
 
 flags.DEFINE_integer(
     "train_epoch_increment", 500,
-    "Number of epochs to incrememnt model training.")
+    "Number of epochs to increment model training.")
 
 flags.DEFINE_bool(
     "compute_dev_accuracy", False,
@@ -116,11 +117,23 @@ flags.DEFINE_bool(
     "sum_loss", False,
     "Whether to sum (True) loss or average it (False).")
 
+flags.DEFINE_string(
+    "bert_model", 'uncased_L-12_H-768_A-12',
+    "The name of the BERT model.")
+
+flags.DEFINE_string(
+    "bert_pretrained_base_dir", 'gs://cloud-tpu-checkpoints/bert/',
+    "Base directory of pretrained BERT model.")
+
+flags.DEFINE_bool(
+    "initialize_weights", True,
+    "Whether to initialize weights to ckpt.")
+
 
 def main(_):
     tf.logging.set_verbosity(tf.logging.INFO)
-    BERT_MODEL = 'uncased_L-12_H-768_A-12'
-    BERT_PRETRAINED_DIR = 'gs://cloud-tpu-checkpoints/bert/' + BERT_MODEL
+    BERT_MODEL = FLAGS.bert_model   # 'uncased_L-12_H-768_A-12'
+    BERT_PRETRAINED_DIR = FLAGS.bert_pretrained_base_dir + BERT_MODEL   # 'gs://cloud-tpu-checkpoints/bert/' + BERT_MODEL
     OUTPUT_BUCKET = 'bert_output_bucket_mteoh'
     BERT_TFRECORD_BUCKET = 'gs://mteoh_siamese_bert_data'
     TASK = FLAGS.task
@@ -131,6 +144,7 @@ def main(_):
     PREDS_DIR = os.path.join(MAIN_DIR, f'pred_results/{TASK}')
     RANDOM_SAMPLE_SEED = 0
     SAMPLE_SIZE = 2048
+    random.seed(RANDOM_SAMPLE_SEED)
 
     if FLAGS.which_gpu is not None:
         tf.logging.info(f'using GPU: {FLAGS.which_gpu}')
@@ -145,12 +159,11 @@ def main(_):
         os.path.join(TASK_DATA_DIR, f'{FLAGS.dataset}_train_pairs.pkl'))
     tf.logging.info('Done loading training pairs!')
 
-    l_queries_sample = l_queries.sample(
-        n=SAMPLE_SIZE,
-        random_state=RANDOM_SAMPLE_SEED)
-    sample_idx = l_queries_sample.index
-    r_queries_sample = r_queries.loc[sample_idx]
-    labels_sample = labels.loc[sample_idx]
+    int_idx_sample = random.sample(range(len(l_queries)), k=SAMPLE_SIZE)
+
+    l_queries_sample = l_queries.iloc[int_idx_sample]
+    r_queries_sample = r_queries.iloc[int_idx_sample]
+    labels_sample = labels.iloc[int_idx_sample]
 
     df_vdn, df_ref = None, None
     if FLAGS.compute_dev_accuracy:
@@ -190,7 +203,8 @@ def main(_):
             feedforward_logging=FLAGS.feedforward_logging,
             optimizer_logging=FLAGS.optimizer_logging,
             num_tpu_cores=FLAGS.num_tpu_cores,
-            sum_loss=FLAGS.sum_loss)
+            sum_loss=FLAGS.sum_loss,
+            initialize_weights=FLAGS.initialize_weights)
 
         tf.logging.info('****evaluate on dataset...')
         res = sb.evaluate(l_queries_sample, r_queries_sample, labels_sample)
@@ -234,7 +248,8 @@ def main(_):
             feedforward_logging=FLAGS.feedforward_logging,
             optimizer_logging=FLAGS.optimizer_logging,
             num_tpu_cores=FLAGS.num_tpu_cores,
-            sum_loss=FLAGS.sum_loss)
+            sum_loss=FLAGS.sum_loss,
+            initialize_weights=FLAGS.initialize_weights)
 
         tf.logging.info('training on dataset...')
         if FLAGS.use_train_tfrecords:
