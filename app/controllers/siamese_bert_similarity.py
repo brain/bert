@@ -7,6 +7,10 @@ import time
 import os
 import pandas as pd
 import numpy as np
+
+if os.getenv('ENVIRONMENT') == 'test':
+    os.environ["CUDA_VISIBLE_DEVICES"]="-1"
+
 from tensorflow.contrib import predictor
 from pathlib import Path
 from training.ftm_processor import FtmProcessor
