@@ -15,6 +15,7 @@ from google_bert import tokenization
 import model_configs
 
 
+# SAVE_MODEL_BASE_DIR = 'gs://mteoh_bert_models/models/' + model_configs.TRAINED_MODEL_ID
 SAVE_MODEL_BASE_DIR = 'models/' + model_configs.TRAINED_MODEL_ID
 
 class SiameseBertSimilarityPlaceholder(Resource):
@@ -27,9 +28,12 @@ class SiameseBertSimilarity(Resource):
     model_save_dirs = [_dir for _dir in Path(SAVE_MODEL_BASE_DIR).iterdir()
                        if _dir.is_dir() and 'temp' not in str(_dir)]
     model_save_dir = str(sorted(model_save_dirs)[-1])
+    # model_save_dir = SAVE_MODEL_BASE_DIR + '/optimized'
     print(f'--- Loading the model saved at: {model_save_dir}')
 
     predict_fn = predictor.from_saved_model(model_save_dir)
+    print(f'--- Done loading the model!')
+
     print('--- computing dummy input... ---')
     # run in dummy input since model has some overhead on the first prediction
     dummy_val = predict_fn({
@@ -91,7 +95,7 @@ class SiameseBertSimilarity(Resource):
         return results, 200
 
     def _get_similarities(self, doc, docs, sort=True):
-        print(f'doc: {doc}; docs: {docs}')
+        # print(f'doc: {doc}; docs: {docs}')
         start = time.time()
         results = []
         num_batches = len(docs) // model_configs.PREDICT_BATCH_SIZE + 1
@@ -109,7 +113,7 @@ class SiameseBertSimilarity(Resource):
                 for (text, idx, score) in zip(docs, indices, sim_scores)]
 
         print(f'len(results) = {len(results)}')
-        print(f'done prediction: results: {results}')
+        # print(f'done prediction: results: {results}')
         print(f'time taken: {time.time() - start}')
         if sort:
             results = sorted(results, key=itemgetter('score'), reverse=True)
