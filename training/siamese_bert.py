@@ -39,12 +39,15 @@ class SiameseBert(object):
                  feedforward_logging=False,
                  optimizer_logging=False,
                  random_projection_output_dim=128,
-                 sum_loss=False):
+                 sum_loss=False,
+                 initialize_weights=True):
 
         # set up relevant intermediate vars
         vocab_file = os.path.join(bert_pretrained_dir, 'vocab.txt')
         config_file = os.path.join(bert_pretrained_dir, 'bert_config.json')
-        init_checkpoint = os.path.join(bert_pretrained_dir, 'bert_model.ckpt')
+        init_checkpoint = None
+        if initialize_weights:
+            init_checkpoint = os.path.join(bert_pretrained_dir, 'bert_model.ckpt')
         do_lower_case = bert_model_type.startswith('uncased')
 
         # set up tokenizer
