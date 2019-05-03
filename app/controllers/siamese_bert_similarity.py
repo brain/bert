@@ -18,6 +18,7 @@ import model_configs
 # SAVE_MODEL_BASE_DIR = 'gs://mteoh_bert_models/models/' + model_configs.TRAINED_MODEL_ID
 SAVE_MODEL_BASE_DIR = 'models/' + model_configs.TRAINED_MODEL_ID
 
+
 class SiameseBertSimilarityPlaceholder(Resource):
     def post(self):
         return dict(message='siamese bert similarity endpoint reached'), 200
