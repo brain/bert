@@ -7,16 +7,16 @@ import time
 import os
 import pandas as pd
 import numpy as np
-
-if os.getenv('ENVIRONMENT') == 'test':
-    os.environ["CUDA_VISIBLE_DEVICES"]="-1"
-
 from tensorflow.contrib import predictor
 from pathlib import Path
 from training.ftm_processor import FtmProcessor
 from training import featurization
 from google_bert import tokenization
 import model_configs
+
+# Disable GPU during `make test`
+if os.getenv('ENVIRONMENT') == 'test':
+    os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 
 
 # SAVE_MODEL_BASE_DIR = 'gs://mteoh_bert_models/models/' + model_configs.TRAINED_MODEL_ID
