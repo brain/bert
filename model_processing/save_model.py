@@ -12,8 +12,16 @@ flags.DEFINE_string(
     'model_trial_name', None,
     'Trial name for model.')
 
-BERT_MODEL = 'uncased_L-12_H-768_A-12'
-BERT_PRETRAINED_DIR = 'gs://cloud-tpu-checkpoints/bert/' + BERT_MODEL
+flags.DEFINE_string(
+    "bert_model", 'uncased_L-12_H-768_A-12',
+    "The name of the BERT model.")
+
+flags.DEFINE_string(
+    "bert_pretrained_base_dir", 'gs://cloud-tpu-checkpoints/bert/',
+    "Base directory of pretrained BERT model.")
+
+BERT_MODEL = FLAGS.bert_model  # 'uncased_L-12_H-768_A-12'
+BERT_PRETRAINED_DIR = FLAGS.bert_pretrained_base_dir + BERT_MODEL  # 'gs://cloud-tpu-checkpoints/bert/' + BERT_MODEL
 TRAINED_MODEL_BUCKET = 'bert_output_bucket_mteoh'
 TASK = FLAGS.model_trial_name  # 'FTM_BERT_DATA_009_tpu_trial_1'
 TRAINED_MODEL_DIR = 'gs://{}/bert/models/{}'.format(TRAINED_MODEL_BUCKET, TASK)
