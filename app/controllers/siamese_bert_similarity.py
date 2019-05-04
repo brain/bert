@@ -5,26 +5,22 @@ from flask_restful import (
 from operator import itemgetter
 import time
 import os
-import tensorflow as tf
 import pandas as pd
-from training.siamese_modeling import create_model
+import numpy as np
+from tensorflow.contrib import predictor
+from pathlib import Path
 from training.ftm_processor import FtmProcessor
-from training.input_fns import input_fn_builder
 from training import featurization
-from google_bert import modeling
 from google_bert import tokenization
+import model_configs
+
+# Disable GPU during `make test`
+if os.getenv('ENVIRONMENT') == 'test':
+    os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 
 
-BERT_MODEL = 'uncased_L-12_H-768_A-12'
-BERT_PRETRAINED_DIR = 'gs://cloud-tpu-checkpoints/bert/' + BERT_MODEL
-TRAINED_MODEL_BUCKET = 'bert_output_bucket_mteoh'
-TASK = 'FTM_BERT_DATA_009_tpu_trial_1'
-TRAINED_MODEL_DIR = 'gs://{}/bert/models/{}'.format(TRAINED_MODEL_BUCKET, TASK)
-PREDICT_BATCH_SIZE = 256
-RANDOM_PROJECTION_OUTPUT_DIM = 128
-MAX_SEQ_LENGTH = 30
-USE_TPU = False
-SAVE_CHECKPOINT_STEPS = 1000
+# SAVE_MODEL_BASE_DIR = 'gs://mteoh_bert_models/models/' + model_configs.TRAINED_MODEL_ID
+SAVE_MODEL_BASE_DIR = 'models/' + model_configs.TRAINED_MODEL_ID
 
 
 class SiameseBertSimilarityPlaceholder(Resource):
@@ -34,39 +30,43 @@ class SiameseBertSimilarityPlaceholder(Resource):
 
 class SiameseBertSimilarity(Resource):
 
-    def __init__(self):
-        super()
+    model_save_dirs = [_dir for _dir in Path(SAVE_MODEL_BASE_DIR).iterdir()
+                       if _dir.is_dir() and 'temp' not in str(_dir)]
+    model_save_dir = str(sorted(model_save_dirs)[-1])
+    # model_save_dir = SAVE_MODEL_BASE_DIR + '/optimized'
+    print(f'--- Loading the model saved at: {model_save_dir}')
 
-        # general BERT model related things
-        vocab_file = os.path.join(BERT_PRETRAINED_DIR, 'vocab.txt')
-        config_file = os.path.join(BERT_PRETRAINED_DIR, 'bert_config.json')
-        do_lower_case = BERT_MODEL.startswith('uncased')
+    predict_fn = predictor.from_saved_model(model_save_dir)
+    print(f'--- Done loading the model!')
 
-        # checkpoint to initialize from
-        checkpoint_path = tf.train.latest_checkpoint(TRAINED_MODEL_DIR)
-        # checkpoint_path = os.path.join(BERT_PRETRAINED_DIR, 'bert_model.ckpt')
+    print('--- computing dummy input... ---')
+    # run in dummy input since model has some overhead on the first prediction
+    dummy_val = predict_fn({
+        'l_input_ids': [[0] * model_configs.MAX_SEQ_LENGTH],
+        'r_input_ids': [[0] * model_configs.MAX_SEQ_LENGTH],
+        'l_input_mask': [[0] * model_configs.MAX_SEQ_LENGTH],
+        'r_input_mask': [[0] * model_configs.MAX_SEQ_LENGTH]})
+    print('--- done computing dummy input... ---')
 
-        # featurization related tools
-        self.processor = FtmProcessor()
-        self.label_list = self.processor.get_labels()
-        self.tokenizer = tokenization.FullTokenizer(
-            vocab_file=vocab_file,
-            do_lower_case=do_lower_case)
+    # general BERT model related things
+    vocab_file = os.path.join(model_configs.BERT_PRETRAINED_DIR, 'vocab.txt')
+    config_file = os.path.join(model_configs.BERT_PRETRAINED_DIR, 'bert_config.json')
+    do_lower_case = model_configs.BERT_MODEL_TYPE.startswith('uncased')
 
-        # estimator setup
-        run_config = tf.estimator.RunConfig()
-        model_fn = self._model_fn_builder(
-            bert_config=modeling.BertConfig.from_json_file(config_file),
-            init_checkpoint=checkpoint_path)
-        self.estimator = tf.estimator.Estimator(
-            model_fn=model_fn,
-            config=run_config)
+    # featurization related tools
+    processor = FtmProcessor()
+    label_list = processor.get_labels()
+    tokenizer = tokenization.FullTokenizer(
+        vocab_file=vocab_file,
+        do_lower_case=do_lower_case)
 
-        # set up parser
-        self.post_parser = reqparse.RequestParser()
-        self.post_parser.add_argument("doc1", action='append', required=True)
-        self.post_parser.add_argument("doc2", action='append', required=True)
-        self.post_parser.add_argument("sort", required=False)
+    # set up parser
+    post_parser = reqparse.RequestParser()
+    post_parser.add_argument("doc1", action='append', required=True)
+    post_parser.add_argument("doc2", action='append', required=True)
+    post_parser.add_argument("sort", required=False)
+
+    print('----- API ready to serve!  ------')
 
     def post(self):
         '''Calculates similarities between all combination of parameters
@@ -83,31 +83,42 @@ class SiameseBertSimilarity(Resource):
         print(doc1, doc2)
         sort_opt = args.get('sort', True)
 
+        print('----- POST request: Starting similarities... ------')
+
         if len(doc1) == 1:
             doc1 = doc1[0]
 
         results = []
         if isinstance(doc1, str):
-            print(f'doc1: {doc1}; doc2: {doc2}')
             results = self._get_similarities(doc1, doc2, sort=sort_opt)
         else:
             for doc in doc1:
                 result = self._get_similarities(doc, doc2, sort=sort_opt)
                 results.append({"text": doc, "results": result})
+
+        print('----- POST request: done similarities!  ------')
         return results, 200
 
     def _get_similarities(self, doc, docs, sort=True):
-        print(f'doc: {doc}; docs: {docs}')
+        # print(f'doc: {doc}; docs: {docs}')
         start = time.time()
-        num_comparisons = len(docs)
-        df_result = self._predict_pairs(
-            [doc] * num_comparisons, docs)
-        sim_scores = df_result.sim_scores.tolist()
-        indices = df_result.index.values.tolist()
-        results = [
-            {'text': text, 'index': idx, 'score': score}
-            for (text, idx, score) in zip(docs, indices, sim_scores)]
-        print(f'done prediction: results: {results}')
+        results = []
+        num_batches = len(docs) // model_configs.PREDICT_BATCH_SIZE + 1
+        print(f'len(docs) = {len(docs)}')
+        print(f'num_batches = {num_batches}')
+        batches = np.array_split(docs, num_batches)
+        for doc_batch in batches:
+            num_comparisons = len(doc_batch)
+            df_result = self._predict_pairs(
+                [doc] * num_comparisons, doc_batch)
+            sim_scores = df_result.sim_scores.tolist()
+            indices = df_result.index.values.tolist()
+            results += [
+                {'text': text, 'index': idx, 'score': score}
+                for (text, idx, score) in zip(docs, indices, sim_scores)]
+
+        print(f'len(results) = {len(results)}')
+        # print(f'done prediction: results: {results}')
         print(f'time taken: {time.time() - start}')
         if sort:
             results = sorted(results, key=itemgetter('score'), reverse=True)
@@ -116,50 +127,17 @@ class SiameseBertSimilarity(Resource):
     def _predict_pairs(self, l_queries, r_queries):
         pred_features = featurization.convert_examples_to_features(
             self.processor._create_examples(l_queries, r_queries),
-            MAX_SEQ_LENGTH, self.tokenizer)
-        input_fn = input_fn_builder(
-            features=pred_features,
-            seq_length=MAX_SEQ_LENGTH,
-            is_training=False,
-            drop_remainder=False,
-            provided_batch_size=PREDICT_BATCH_SIZE)
-        pred_results = list(self.estimator.predict(input_fn=input_fn))
+            model_configs.MAX_SEQ_LENGTH, self.tokenizer)
+
+        print('--- Prediction: Starting... ---')
+        pred_results = self.predict_fn({
+            'l_input_ids': list(map(lambda f: f.l_input_ids, pred_features)),
+            'r_input_ids': list(map(lambda f: f.r_input_ids, pred_features)),
+            'l_input_mask': list(map(lambda f: f.l_input_mask, pred_features)),
+            'r_input_mask': list(map(lambda f: f.r_input_mask, pred_features))})
+        print('--- Prediction: Done! ---')
+        print(pred_results)
+
         pred_results = pd.DataFrame.from_records(pred_results)
 
         return pred_results
-
-    # TODO: is there a way we can have just one model fn for both training and
-    # this API?
-    def _model_fn_builder(self, bert_config, init_checkpoint):
-
-        def model_fn(features, labels, mode, params):
-
-            l_input_ids = features["l_input_ids"]
-            r_input_ids = features["r_input_ids"]
-            l_input_mask = features["l_input_mask"]
-            r_input_mask = features["r_input_mask"]
-
-            (total_loss, per_example_loss, logits, sim_scores, label_preds,
-                merged_summaries) = create_model(
-                bert_config, False, l_input_ids, r_input_ids,
-                l_input_mask, r_input_mask, labels, True,
-                RANDOM_PROJECTION_OUTPUT_DIM, False, False)
-
-            # initialize variables
-            print(f'---- initializing from: {init_checkpoint}')
-            tvars = tf.trainable_variables()
-            initialized_variable_names = {}
-            assignment_map, initialized_variable_names = \
-                modeling.get_assignment_map_from_checkpoint(tvars, init_checkpoint)
-            with tf.name_scope('assignments'):
-                tf.train.init_from_checkpoint(init_checkpoint, assignment_map)
-
-            # output specfication
-            output_spec = tf.estimator.EstimatorSpec(
-                mode=mode,
-                predictions={"sim_scores": sim_scores,
-                             "label_preds": label_preds})
-
-            return output_spec
-
-        return model_fn

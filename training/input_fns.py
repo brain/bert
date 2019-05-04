@@ -1,6 +1,36 @@
 import tensorflow as tf
 
 
+def serving_input_receiver_fn_builder(seq_length):
+    def serving_input_receiver_fn():
+        """Used for the prediction service"""
+        feats_dict = {
+            "l_input_ids":
+                tf.placeholder(
+                    shape=[None, seq_length],
+                    dtype=tf.int32,
+                    name='l_input_ids'),
+            "r_input_ids":
+                tf.placeholder(
+                    shape=[None, seq_length],
+                    dtype=tf.int32,
+                    name='r_input_ids'),
+            "l_input_mask":
+                tf.placeholder(
+                    shape=[None, seq_length],
+                    dtype=tf.int32,
+                    name='l_input_mask'),
+            "r_input_mask":
+                tf.placeholder(
+                    shape=[None, seq_length],
+                    dtype=tf.int32,
+                    name='r_input_mask')}
+
+        return tf.estimator.export.build_raw_serving_input_receiver_fn(feats_dict)
+
+    return serving_input_receiver_fn
+
+
 def input_fn_builder(features, seq_length, is_training, drop_remainder,
                      labels=None, provided_batch_size=None):
     """Creates an `input_fn` closure to be passed to TPUEstimator."""
