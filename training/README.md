@@ -58,7 +58,7 @@ cd ~/bert; docker run -it -e TPU_NAME=${TPU_NAME} -v${PWD}:/app -w/app python:3.
 This starts a docker container that uses Python 3.6.
 In the docker container, run:
 ```
-pip install --upgrade google-api-python-client; pip install --upgrade oauth2client; pip install -r requirements.txt
+pip install --upgrade google-api-python-client; pip install --upgrade oauth2client; pip install -r training/requirements.txt
 ```
 This installs all the necessary requirements.
 ### 6. Run training script
