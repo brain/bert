@@ -23,11 +23,6 @@ if os.getenv('ENVIRONMENT') == 'test':
 SAVE_MODEL_BASE_DIR = 'models/' + model_configs.TRAINED_MODEL_ID
 
 
-class SiameseBertSimilarityPlaceholder(Resource):
-    def post(self):
-        return dict(message='siamese bert similarity endpoint reached'), 200
-
-
 class SiameseBertSimilarity(Resource):
 
     model_save_dirs = [_dir for _dir in Path(SAVE_MODEL_BASE_DIR).iterdir()
@@ -77,10 +72,10 @@ class SiameseBertSimilarity(Resource):
 
         '''
         args = self.post_parser.parse_args()
-        print(args)
+        # print(args)
         doc1 = args['doc1']
         doc2 = args['doc2']
-        print(doc1, doc2)
+        # print(doc1, doc2)
         sort_opt = args.get('sort', True)
 
         print('----- POST request: Starting similarities... ------')
