@@ -15,6 +15,7 @@ pip install tensorflow-gpu==1.13.1
 ```
 (We have to run the last step manually because including tensorflow-gpu in the requirements file causes it to fail on CircleCi.)
 If NVIDIA-related dependencies are already set up, you can skip the remaining steps.
+
 2. Install NVIDIA package repos:
 ```
 wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu1804/x86_64/cuda-repo-ubuntu1804_10.0.130-1_amd64.deb
@@ -25,11 +26,14 @@ wget http://developer.download.nvidia.com/compute/machine-learning/repos/ubuntu1
 sudo apt install ./nvidia-machine-learning-repo-ubuntu1804_1.0.0-1_amd64.deb
 sudo apt-get update
 ```
+
 3. Install the NVIDIA driver:
 ```
 sudo apt-get install --no-install-recommends nvidia-driver-410
 ```
+
 4. Reboot your machine
+
 5. Install CUDA and cuDNN:
 ```
 sudo apt-get install --no-install-recommends \
